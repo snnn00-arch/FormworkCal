@@ -83,6 +83,55 @@ describe('scaleCalibrator & beamDetector', () => {
     expect(diag.beams[0].name).toBe('B1');
     expect(diag.beams[0].start).toEqual({ x: 200, y: 300 });
     expect(diag.beams[0].end).toEqual({ x: 600, y: 300 });
+    expect(diag.counts.horizontalGrids).toBeGreaterThanOrEqual(1);
+    expect(diag.counts.gridGuidedBeams).toBe(1);
+  });
+
+  it('uses detected grid lines as reference axes to detect beams on grids, crossing grids, or with only one visible edge alongside a grid', () => {
+    const pageDimensions = { width: 1200, height: 900 };
+    const lines: RawVectorLine[] = [
+      // Vertical Grid 1 at x = 200 (full-span grid line)
+      { x1: 200, y1: 80, x2: 200, y2: 820 },
+      // Vertical Grid 2 at x = 600 (full-span grid line)
+      { x1: 600, y1: 80, x2: 600, y2: 820 },
+      // Horizontal Grid A at y = 250 (full-span grid line)
+      { x1: 80, y1: 250, x2: 1080, y2: 250 },
+      // Horizontal Grid B at y = 550 (full-span grid line)
+      { x1: 80, y1: 550, x2: 1080, y2: 550 },
+
+      // Case A: Beam B1 on Horizontal Grid A (y = 250), broken into split segments by column faces
+      { x1: 210, y1: 240, x2: 390, y2: 240 },
+      { x1: 410, y1: 240, x2: 590, y2: 240 },
+      { x1: 210, y1: 260, x2: 590, y2: 260 },
+
+      // Case B: Beam B2 on Horizontal Grid B (y = 550) where ONLY ONE beam edge (y = 540) is visible next to the grid line
+      { x1: 205, y1: 540, x2: 595, y2: 540 },
+
+      // Case C: Secondary Beam B3 crossing between Vertical Grid 1 (x = 200) and Vertical Grid 2 (x = 600) at y = 400
+      { x1: 205, y1: 390, x2: 595, y2: 390 },
+      { x1: 205, y1: 410, x2: 595, y2: 410 },
+    ];
+
+    const texts: RawTextItem[] = [
+      { text: '1', x: 200, y: 75 },
+      { text: '2', x: 600, y: 75 },
+      { text: 'A', x: 75, y: 250 },
+      { text: 'B', x: 75, y: 550 },
+      { text: 'B1', x: 400, y: 250 },
+      { text: 'B2', x: 400, y: 550 },
+      { text: 'B3', x: 400, y: 400 },
+      // Case D: Beam B4 on Vertical Grid 1 (x = 200) between Grid A (250) and Grid B (550) recovered by tag + grid intersection
+      { text: 'B4', x: 200, y: 400 },
+    ];
+
+    const diag = autoDetectBeamsWithDiagnostics(lines, 1.0, 60, texts, pageDimensions);
+    expect(diag.counts.horizontalGrids).toBeGreaterThanOrEqual(2);
+    expect(diag.counts.verticalGrids).toBeGreaterThanOrEqual(2);
+    expect(diag.beams.length).toBe(4);
+    expect(diag.counts.gridGuidedBeams).toBe(4);
+
+    const names = diag.beams.map((b) => b.name).sort();
+    expect(names).toEqual(['B1', 'B2', 'B3', 'B4']);
   });
 
   it('generates a realistic sample beam plan with multiple heights (40, 50, 60, 70 cm)', () => {

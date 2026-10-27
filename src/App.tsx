@@ -73,7 +73,7 @@ export const App: React.FC = () => {
       setPixelsPerCm(scaleResult.pixelsPerCm);
       setScaleNote(scaleResult.confidence);
 
-      // 2. Auto line classification + beam detection
+      // 2. Auto line classification + Grid-Referenced Beam Detection
       if (loaded.vectorLines.length > 0) {
         const diag = autoDetectBeamsWithDiagnostics(
           loaded.vectorLines,
@@ -87,7 +87,7 @@ export const App: React.FC = () => {
           setBeams(withCorners);
           setSelectedBeamId(withCorners[0]?.id || null);
           alert(
-            `นำเข้า PDF สำเร็จ!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- จำแนกและตัดเส้นกรอบกระดาษ/ตาราง: ${diag.counts.borderOrTitleBlock} เส้น\n- จำแนกและตัดเส้นกริด/เส้นบอกระยะ: ${diag.counts.gridOrDimension} เส้น\n- ตรวจพบและวางแนวคานจริงทับบนแปลน: ${diag.beams.length} คาน`
+            `นำเข้า PDF สำเร็จ!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- ตัดเส้นกรอบกระดาษ/ตาราง: ${diag.counts.borderOrTitleBlock} เส้น\n- ตรวจพบแกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- สร้างคานจำลองทับตำแหน่งคานจริง: ${diag.beams.length} คาน (อ้างอิงตามแนวกริด/ตัดเส้นกริด ${diag.counts.gridGuidedBeams} คาน)`
           );
           return;
         }
@@ -116,7 +116,7 @@ export const App: React.FC = () => {
     );
     if (diag.beams.length === 0) {
       alert(
-        `สแกนจำแนกเส้นเสร็จสิ้น:\n- ตัดกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- ตัดเส้นกริด/บอกระยะออก: ${diag.counts.gridOrDimension} เส้น\n- ไม่พบคู่เส้นขนานของคานที่ชัดเจน คุณสามารถใช้ปุ่ม "วาดคาน" คลิกสร้างแนวคานบนแปลนได้ทันทีครับ`
+        `สแกนจำแนกเส้นเสร็จสิ้น:\n- ตัดกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- พบแกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- ไม่พบคู่เส้นขนานของคานที่ชัดเจน คุณสามารถใช้ปุ่ม "วาดคาน" คลิกสร้างแนวคานบนแปลนได้ทันทีครับ`
       );
       return;
     }
@@ -124,7 +124,7 @@ export const App: React.FC = () => {
     setBeams(withCorners);
     setSelectedBeamId(withCorners[0]?.id || null);
     alert(
-      `สแกนและจำแนกเส้นสำเร็จ!\n- ตัดเส้นกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- ตัดเส้นกริด/เส้นบอกระยะออก: ${diag.counts.gridOrDimension} เส้น\n- สร้างคานจำลองทับตำแหน่งคานจริง: ${diag.beams.length} คาน พร้อมจัดเรียงไม้แบบ (หนา 5 ซม.) เรียบร้อยแล้ว!`
+      `สแกนและอ้างอิงเส้นกริดสำเร็จ!\n- ตัดเส้นกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- ใช้แกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- สร้างคานจำลองทับตำแหน่งคานจริง: ${diag.beams.length} คาน (อ้างอิงบนกริด/ตัดผ่านกริด ${diag.counts.gridGuidedBeams} คาน) พร้อมจัดเรียงไม้แบบหนา 5 ซม.`
     );
   };
 

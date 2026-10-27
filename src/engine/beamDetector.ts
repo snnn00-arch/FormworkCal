@@ -24,13 +24,28 @@ export interface ClassifiedLine {
   reason?: string;
 }
 
+export interface GridAxis {
+  orientation: 'horizontal' | 'vertical';
+  coord: number; // y for horizontal grid line, x for vertical grid line
+  start: number;
+  end: number;
+  label?: string;
+}
+
 export interface BeamDetectionDiagnostics {
   beams: BeamElement[];
   classifiedLines: ClassifiedLine[];
+  gridAxes: {
+    horizontal: GridAxis[];
+    vertical: GridAxis[];
+  };
   counts: {
     borderOrTitleBlock: number;
     gridOrDimension: number;
     beamCandidates: number;
+    horizontalGrids: number;
+    verticalGrids: number;
+    gridGuidedBeams: number;
     detectedBeams: number;
   };
 }
@@ -100,22 +115,53 @@ function isTitleBlockKeyword(text: string): boolean {
 }
 
 function findNearestBeamLabel(
-  midX: number,
-  midY: number,
+  start: Point,
+  end: Point,
+  orientation: 'horizontal' | 'vertical',
   texts: RawTextItem[],
-  usedLabels: Set<number>
+  usedLabels: Set<number>,
+  maxOrthogonalDist = 38
 ): string | null {
+  const midX = (start.x + end.x) / 2;
+  const midY = (start.y + end.y) / 2;
+  const minX = Math.min(start.x, end.x);
+  const maxX = Math.max(start.x, end.x);
+  const minY = Math.min(start.y, end.y);
+  const maxY = Math.max(start.y, end.y);
+
   let bestIdx = -1;
-  let bestDist = 75;
+  let bestScore = Infinity;
 
   for (let i = 0; i < texts.length; i++) {
     if (usedLabels.has(i)) continue;
     const t = texts[i].text.trim();
     if (!isBeamTagText(t)) continue;
-    const d = Math.hypot(texts[i].x - midX, texts[i].y - midY);
-    if (d < bestDist) {
-      bestDist = d;
-      bestIdx = i;
+
+    const tx = texts[i].x;
+    const ty = texts[i].y;
+
+    if (orientation === 'horizontal') {
+      const orthoDist = Math.abs(ty - midY);
+      const inlineDist = Math.abs(tx - midX);
+      const isNearEndpoint = Math.abs(tx - minX) <= 15 || Math.abs(tx - maxX) <= 15;
+      if (orthoDist <= maxOrthogonalDist && tx >= minX - 8 && tx <= maxX + 8) {
+        const score = orthoDist * 3 + inlineDist * 0.6 + (isNearEndpoint ? 120 : 0);
+        if (score < bestScore) {
+          bestScore = score;
+          bestIdx = i;
+        }
+      }
+    } else {
+      const orthoDist = Math.abs(tx - midX);
+      const inlineDist = Math.abs(ty - midY);
+      const isNearEndpoint = Math.abs(ty - minY) <= 15 || Math.abs(ty - maxY) <= 15;
+      if (orthoDist <= maxOrthogonalDist && ty >= minY - 8 && ty <= maxY + 8) {
+        const score = orthoDist * 3 + inlineDist * 0.6 + (isNearEndpoint ? 120 : 0);
+        if (score < bestScore) {
+          bestScore = score;
+          bestIdx = i;
+        }
+      }
     }
   }
 
@@ -124,6 +170,149 @@ function findNearestBeamLabel(
     return texts[bestIdx].text.trim();
   }
   return null;
+}
+
+/**
+ * Collinearly merges split segments along the same coordinate (e.g. a beam edge broken by an intersecting column/grid line)
+ */
+function mergeCollinearCandidateSegments(
+  candidates: ClassifiedLine[],
+  maxCoordDiff = 3.0,
+  maxInlineGap = 42
+): ClassifiedLine[] {
+  if (candidates.length === 0) return [];
+  const result: ClassifiedLine[] = [];
+
+  for (const orient of ['horizontal', 'vertical'] as const) {
+    const group = candidates
+      .filter((c) => c.orientation === orient)
+      .sort((a, b) => a.coord - b.coord || a.start - b.start);
+
+    const merged: ClassifiedLine[] = [];
+    for (const seg of group) {
+      let didMerge = false;
+      for (let i = merged.length - 1; i >= 0; i--) {
+        const m = merged[i];
+        if (Math.abs(seg.coord - m.coord) > maxCoordDiff) {
+          if (seg.coord - m.coord > maxCoordDiff * 2) break;
+          continue;
+        }
+        // Check if overlapping or separated by a small column/grid intersection gap
+        if (seg.start <= m.end + maxInlineGap && seg.end >= m.start - maxInlineGap) {
+          const newStart = Math.min(m.start, seg.start);
+          const newEnd = Math.max(m.end, seg.end);
+          const newCoord = (m.coord * m.length + seg.coord * seg.length) / (m.length + seg.length || 1);
+          m.start = newStart;
+          m.end = newEnd;
+          m.coord = newCoord;
+          m.length = newEnd - newStart;
+          m.line =
+            orient === 'horizontal'
+              ? { x1: newStart, y1: newCoord, x2: newEnd, y2: newCoord }
+              : { x1: newCoord, y1: newStart, x2: newCoord, y2: newEnd };
+          didMerge = true;
+          break;
+        }
+      }
+      if (!didMerge) {
+        merged.push({ ...seg, line: { ...seg.line } });
+      }
+    }
+    result.push(...merged);
+  }
+
+  return result;
+}
+
+/**
+ * Extracts structural Grid Axes (X-grids and Y-grids) from classified grid lines,
+ * grid bubble texts (A, B, C / 1, 2, 3), and symmetrical centerline clusters.
+ */
+export function extractGridAxes(
+  classifiedLines: ClassifiedLine[],
+  texts: RawTextItem[] = []
+): { horizontal: GridAxis[]; vertical: GridAxis[] } {
+  const horizMap: GridAxis[] = [];
+  const vertMap: GridAxis[] = [];
+
+  const addOrMergeAxis = (
+    list: GridAxis[],
+    orientation: 'horizontal' | 'vertical',
+    coord: number,
+    start: number,
+    end: number,
+    label?: string
+  ) => {
+    const existing = list.find((g) => Math.abs(g.coord - coord) <= 8);
+    if (existing) {
+      existing.coord = (existing.coord + coord) / 2;
+      existing.start = Math.min(existing.start, start);
+      existing.end = Math.max(existing.end, end);
+      if (label && !existing.label) existing.label = label;
+    } else {
+      list.push({ orientation, coord, start, end, label });
+    }
+  };
+
+  // 1. From lines explicitly classified as grid lines (dashed_grid_line, full_span_grid_line, or grid bubble lines)
+  const gridLines = classifiedLines.filter(
+    (l) =>
+      l.category === 'grid_or_dimension' &&
+      (l.reason === 'dashed_grid_line' ||
+        l.reason === 'full_span_grid_line' ||
+        l.reason === 'grid_bubble_line')
+  );
+
+  for (const gl of gridLines) {
+    if (gl.orientation === 'horizontal') {
+      addOrMergeAxis(horizMap, 'horizontal', gl.coord, gl.start, gl.end);
+    } else if (gl.orientation === 'vertical') {
+      addOrMergeAxis(vertMap, 'vertical', gl.coord, gl.start, gl.end);
+    }
+  }
+
+  // 2. Also infer grid axes from symmetric pairs of beam candidates (since main beams sit on grid axes!)
+  const beamCandidates = classifiedLines.filter((l) => l.category === 'beam_candidate');
+  for (let i = 0; i < beamCandidates.length; i++) {
+    for (let j = i + 1; j < beamCandidates.length; j++) {
+      const a = beamCandidates[i];
+      const b = beamCandidates[j];
+      if (a.orientation !== b.orientation) continue;
+      const gap = Math.abs(a.coord - b.coord);
+      if (gap >= 8 && gap <= 42) {
+        const overlapStart = Math.max(a.start, b.start);
+        const overlapEnd = Math.min(a.end, b.end);
+        if (overlapEnd - overlapStart >= 60) {
+          const midCoord = (a.coord + b.coord) / 2;
+          if (a.orientation === 'horizontal') {
+            addOrMergeAxis(horizMap, 'horizontal', midCoord, overlapStart, overlapEnd);
+          } else if (a.orientation === 'vertical') {
+            addOrMergeAxis(vertMap, 'vertical', midCoord, overlapStart, overlapEnd);
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Attach Grid Bubble Labels (A, B, C / 1, 2, 3) if near the axis
+  for (const txt of texts) {
+    if (!isGridBubbleText(txt.text)) continue;
+    for (const h of horizMap) {
+      if (Math.abs(txt.y - h.coord) <= 18) {
+        h.label = txt.text.trim();
+      }
+    }
+    for (const v of vertMap) {
+      if (Math.abs(txt.x - v.coord) <= 18) {
+        v.label = txt.text.trim();
+      }
+    }
+  }
+
+  horizMap.sort((a, b) => a.coord - b.coord);
+  vertMap.sort((a, b) => a.coord - b.coord);
+
+  return { horizontal: horizMap, vertical: vertMap };
 }
 
 /**
@@ -154,8 +343,35 @@ export function classifyPlanLines(
 
   const pageW = Math.max(maxX, 600);
   const pageH = Math.max(maxY, 450);
-  const spanW = Math.max(maxX - (isFinite(minPageX) ? minPageX : 0), 400);
-  const spanH = Math.max(maxY - (isFinite(minPageY) ? minPageY : 0), 300);
+
+  // Compute drawing content span excluding outer 8.5% paper border lines
+  let contentMinX = Infinity;
+  let contentMaxX = 0;
+  let contentMinY = Infinity;
+  let contentMaxY = 0;
+  for (const l of lines) {
+    const lx1 = Math.min(l.x1, l.x2);
+    const lx2 = Math.max(l.x1, l.x2);
+    const ly1 = Math.min(l.y1, l.y2);
+    const ly2 = Math.max(l.y1, l.y2);
+    if (pageDimensions) {
+      if (ly1 < pageH * 0.085 || ly2 > pageH * 0.905) continue;
+      if (lx1 < pageW * 0.085 || lx2 > pageW * 0.905) continue;
+    }
+    contentMinX = Math.min(contentMinX, lx1);
+    contentMaxX = Math.max(contentMaxX, lx2);
+    contentMinY = Math.min(contentMinY, ly1);
+    contentMaxY = Math.max(contentMaxY, ly2);
+  }
+
+  const spanW = Math.max(
+    contentMaxX > contentMinX ? contentMaxX - contentMinX : maxX - (isFinite(minPageX) ? minPageX : 0),
+    350
+  );
+  const spanH = Math.max(
+    contentMaxY > contentMinY ? contentMaxY - contentMinY : maxY - (isFinite(minPageY) ? minPageY : 0),
+    250
+  );
 
   // Prepare normalized line objects
   const items: ClassifiedLine[] = lines.map((line) => {
@@ -208,23 +424,42 @@ export function classifyPlanLines(
   const horizByCoord = items.filter((it) => it.orientation === 'horizontal');
   const vertByCoord = items.filter((it) => it.orientation === 'vertical');
 
+  // Pre-check which lines have a Grid Bubble (A, B, C / 1, 2, 3) at their endpoints (within 65px of start or end)
+  const hasGridBubbleNearLine = (item: ClassifiedLine): boolean => {
+    return texts.some((txt) => {
+      if (!isGridBubbleText(txt.text)) return false;
+      const distToCoord =
+        item.orientation === 'horizontal'
+          ? Math.abs(txt.y - item.coord)
+          : Math.abs(txt.x - item.coord);
+      const posAlong = item.orientation === 'horizontal' ? txt.x : txt.y;
+      const nearStartOrEnd =
+        Math.abs(posAlong - item.start) <= 65 || Math.abs(posAlong - item.end) <= 65;
+      return distToCoord <= 20 && nearStartOrEnd;
+    });
+  };
+
   for (const item of items) {
     if (item.orientation === 'diagonal') continue;
 
+    const isConfirmedGridLine = hasGridBubbleNearLine(item);
+
     // ---------------------------------------------------------
     // 1. Check PAPER BORDER & TITLE BLOCK (กรอบกระดาษ / ตารางข้างแบบ)
+    // Never classify a confirmed Grid Line (with Grid Bubble A,B,C / 1,2,3) as a paper border!
     // ---------------------------------------------------------
-    if (item.orientation === 'horizontal') {
+    if (!isConfirmedGridLine && item.orientation === 'horizontal') {
       const nearTopOrBottomMargin =
         pageDimensions && (item.coord < pageH * 0.085 || item.coord > pageH * 0.905);
       const isOuterDrawingFrame =
+        !pageDimensions &&
         lines.length >= 8 &&
-        item.length > spanW * 0.65 &&
-        (item.coord - minPageY < spanH * 0.06 || maxY - item.coord < spanH * 0.06);
+        item.length > spanW * 0.72 &&
+        (item.coord - minPageY < spanH * 0.05 || maxY - item.coord < spanH * 0.05);
       const spansEntireSheet =
         pageDimensions &&
         item.length > pageW * 0.72 &&
-        (item.coord < pageH * 0.14 || item.coord > pageH * 0.86);
+        (item.coord < pageH * 0.12 || item.coord > pageH * 0.88);
       const inRightTitleBlock =
         hasRightTitleBlock && item.start > pageW * 0.72;
       const inBottomTitleBlock =
@@ -241,17 +476,18 @@ export function classifyPlanLines(
         item.reason = 'paper_border_or_titleblock';
         continue;
       }
-    } else if (item.orientation === 'vertical') {
+    } else if (!isConfirmedGridLine && item.orientation === 'vertical') {
       const nearLeftOrRightMargin =
         pageDimensions && (item.coord < pageW * 0.085 || item.coord > pageW * 0.905);
       const isOuterDrawingFrame =
+        !pageDimensions &&
         lines.length >= 8 &&
-        item.length > spanH * 0.65 &&
-        (item.coord - minPageX < spanW * 0.06 || maxX - item.coord < spanW * 0.06);
+        item.length > spanH * 0.72 &&
+        (item.coord - minPageX < spanW * 0.05 || maxX - item.coord < spanW * 0.05);
       const spansEntireSheet =
         pageDimensions &&
         item.length > pageH * 0.72 &&
-        (item.coord < pageW * 0.14 || item.coord > pageW * 0.86);
+        (item.coord < pageW * 0.12 || item.coord > pageW * 0.88);
       const inRightTitleBlock =
         hasRightTitleBlock && item.coord > pageW * 0.72;
       const inBottomTitleBlock =
@@ -273,6 +509,12 @@ export function classifyPlanLines(
     // ---------------------------------------------------------
     // 2. Check GRID LINES & DIMENSION LINES (เส้นกริด / เส้นบอกระยะ)
     // ---------------------------------------------------------
+    if (isConfirmedGridLine) {
+      item.category = 'grid_or_dimension';
+      item.reason = 'grid_bubble_line';
+      continue;
+    }
+
     const sameAxisPool = item.orientation === 'horizontal' ? horizByCoord : vertByCoord;
     const collinearSegments = sameAxisPool.filter(
       (other) => Math.abs(other.coord - item.coord) <= 2.5
@@ -290,7 +532,6 @@ export function classifyPlanLines(
     // that shoots past normal bays (unless there is a matching twin of the same length)
     const maxDrawingSpan = item.orientation === 'horizontal' ? spanW : spanH;
     if (lines.length > 8 && item.length > maxDrawingSpan * 0.82) {
-      // Check if it has a twin of very similar length and aligned endpoints within 45px
       const hasAlignedTwin = sameAxisPool.some(
         (other) =>
           other !== item &&
@@ -308,7 +549,8 @@ export function classifyPlanLines(
 
     // 2c. Dimension Line / Grid Bubble Line: passes directly through dimension text or grid bubble text
     // WITHOUT having a beam tag nearby
-    let touchesDimensionOrGridBubble = false;
+    let touchesDimension = false;
+    let touchesGridBubble = false;
     let touchesBeamTag = false;
 
     for (const txt of texts) {
@@ -323,23 +565,23 @@ export function classifyPlanLines(
       if (posAlong >= item.start - 35 && posAlong <= item.end + 35 && distToCoord <= 14) {
         if (isBeamTagText(txt.text)) {
           touchesBeamTag = true;
-        } else if (isDimensionText(txt.text) || isGridBubbleText(txt.text)) {
-          touchesDimensionOrGridBubble = true;
+        } else if (isDimensionText(txt.text)) {
+          touchesDimension = true;
+        } else if (isGridBubbleText(txt.text)) {
+          touchesGridBubble = true;
         }
       }
     }
 
-    if (touchesDimensionOrGridBubble && !touchesBeamTag) {
+    if ((touchesDimension || touchesGridBubble) && !touchesBeamTag) {
       item.category = 'grid_or_dimension';
-      item.reason = 'dimension_or_grid_label_line';
+      item.reason = touchesGridBubble ? 'grid_bubble_line' : 'dimension_or_grid_label_line';
       continue;
     }
   }
 
   // ---------------------------------------------------------
   // 3. Detect Dense Schedule / Legend Tables (ตารางถี่ๆ ที่ไม่ใช่คาน)
-  // If >= 5 parallel lines of almost identical start/end are stacked within 35px intervals,
-  // they belong to a schedule table or stair hatch, not beams.
   // ---------------------------------------------------------
   for (const pool of [horizByCoord, vertByCoord]) {
     const candidates = pool
@@ -378,8 +620,11 @@ export function classifyPlanLines(
 }
 
 /**
- * Stage 2: Pairs only verified 'beam_candidate' lines that satisfy strict
- * structural beam symmetry (aligned start/end faces, realistic width, no inner lines).
+ * Stage 2: Grid-Guided + Parallel-Edge Beam Detection
+ * - Uses detected Grid Axes (เส้นกริด) as structural reference lines!
+ *   1. Main Beams ON Grid Lines (คานหลักที่วางทับแนวเส้นกริด หรือมีขอบคานขนาบเส้นกริด)
+ *   2. Beams CROSSING Between Perpendicular Grid Lines (คานที่พาดตัดระหว่างเส้นกริดเสา)
+ *   3. Beam Labels (เช่น B1, GB1) sitting on a grid bay between two perpendicular grid lines
  */
 export function autoDetectBeamsWithDiagnostics(
   lines: RawVectorLine[],
@@ -390,19 +635,25 @@ export function autoDetectBeamsWithDiagnostics(
 ): BeamDetectionDiagnostics {
   const safeScale = pixelsPerCm > 0 ? pixelsPerCm : 1;
   const classifiedLines = classifyPlanLines(lines, texts, pageDimensions);
+  const gridAxes = extractGridAxes(classifiedLines, texts);
+
+  // Merge collinear candidate segments that were broken by column/grid intersections
+  const rawCandidates = classifiedLines.filter((l) => l.category === 'beam_candidate');
+  const candidates = mergeCollinearCandidateSegments(rawCandidates, 3.0, Math.max(35, 35 * safeScale));
 
   const counts = {
     borderOrTitleBlock: classifiedLines.filter((l) => l.category === 'border_or_titleblock').length,
     gridOrDimension: classifiedLines.filter((l) => l.category === 'grid_or_dimension').length,
-    beamCandidates: classifiedLines.filter((l) => l.category === 'beam_candidate').length,
+    beamCandidates: candidates.length,
+    horizontalGrids: gridAxes.horizontal.length,
+    verticalGrids: gridAxes.vertical.length,
+    gridGuidedBeams: 0,
     detectedBeams: 0,
   };
 
-  const candidates = classifiedLines.filter((l) => l.category === 'beam_candidate');
-
-  // Beam width range: 10 cm to 40 cm (clamped safely for 1:100 and 1:50 drawings)
+  // Beam width range: 10 cm to 40 cm
   const minWidthPx = Math.max(5, 8 * safeScale);
-  const maxWidthPx = Math.max(38, 42 * safeScale);
+  const maxWidthPx = Math.max(40, 45 * safeScale);
   const minLengthPx = Math.max(45, 50 * safeScale);
   const targetWidthPx = 20 * safeScale;
 
@@ -411,19 +662,86 @@ export function autoDetectBeamsWithDiagnostics(
   const beams: BeamElement[] = [];
   let indexCounter = 1;
 
+  // Helper to check if a beam already exists at the same location
+  const isDuplicateBeam = (start: Point, end: Point, orientation: 'horizontal' | 'vertical'): boolean => {
+    const coord = orientation === 'horizontal' ? start.y : start.x;
+    const bStart = orientation === 'horizontal' ? Math.min(start.x, end.x) : Math.min(start.y, end.y);
+    const bEnd = orientation === 'horizontal' ? Math.max(start.x, end.x) : Math.max(start.y, end.y);
+
+    return beams.some((existing) => {
+      const isExHoriz = Math.abs(existing.end.y - existing.start.y) <= Math.abs(existing.end.x - existing.start.x);
+      const exOrient = isExHoriz ? 'horizontal' : 'vertical';
+      if (exOrient !== orientation) return false;
+      const exCoord = isExHoriz ? existing.start.y : existing.start.x;
+      if (Math.abs(exCoord - coord) > maxWidthPx * 0.75) return false;
+
+      const exStart = isExHoriz
+        ? Math.min(existing.start.x, existing.end.x)
+        : Math.min(existing.start.y, existing.end.y);
+      const exEnd = isExHoriz
+        ? Math.max(existing.start.x, existing.end.x)
+        : Math.max(existing.start.y, existing.end.y);
+      const overlap = Math.min(bEnd, exEnd) - Math.max(bStart, exStart);
+      return overlap > Math.min(bEnd - bStart, exEnd - exStart) * 0.5;
+    });
+  };
+
+  // Helper to snap beam endpoints to perpendicular grid intersections if close (within 32px)
+  const snapEndpointsToPerpGrids = (
+    startCoord: number,
+    endCoord: number,
+    orientation: 'horizontal' | 'vertical'
+  ): { start: number; end: number; crossesGridCount: number } => {
+    const perpGrids = orientation === 'horizontal' ? gridAxes.vertical : gridAxes.horizontal;
+    let snappedStart = startCoord;
+    let snappedEnd = endCoord;
+    const snapTol = Math.max(25, 28 * safeScale);
+
+    for (const pg of perpGrids) {
+      if (Math.abs(pg.coord - startCoord) <= snapTol) {
+        snappedStart = pg.coord;
+      }
+      if (Math.abs(pg.coord - endCoord) <= snapTol) {
+        snappedEnd = pg.coord;
+      }
+    }
+
+    const crossesGridCount = perpGrids.filter(
+      (pg) => pg.coord >= Math.min(snappedStart, snappedEnd) - snapTol && pg.coord <= Math.max(snappedStart, snappedEnd) + snapTol
+    ).length;
+
+    return {
+      start: Math.min(snappedStart, snappedEnd),
+      end: Math.max(snappedStart, snappedEnd),
+      crossesGridCount,
+    };
+  };
+
+  // =========================================================================
+  // PASS 1: Detect Parallel Beam Candidate Pairs (prioritizing beams ON or CROSSING Grid Lines!)
+  // =========================================================================
   for (let i = 0; i < candidates.length; i++) {
     if (usedIndices.has(i)) continue;
     const c1 = candidates[i];
     if (c1.length < minLengthPx) continue;
+    if (c1.orientation === 'diagonal') continue;
+    const orient: 'horizontal' | 'vertical' = c1.orientation;
+
+    const parallelGrids = orient === 'horizontal' ? gridAxes.horizontal : gridAxes.vertical;
 
     let bestPartnerIdx = -1;
     let bestScore = Infinity;
-    let bestGeom: { start: Point; end: Point; gapPx: number } | null = null;
+    let bestGeom: {
+      start: Point;
+      end: Point;
+      gapPx: number;
+      isGridGuided: boolean;
+    } | null = null;
 
     for (let j = i + 1; j < candidates.length; j++) {
       if (usedIndices.has(j)) continue;
       const c2 = candidates[j];
-      if (c2.orientation !== c1.orientation) continue;
+      if (c2.orientation !== orient) continue;
       if (c2.length < minLengthPx) continue;
 
       const gapPx = Math.abs(c1.coord - c2.coord);
@@ -434,24 +752,36 @@ export function autoDetectBeamsWithDiagnostics(
       const overlap = overlapEnd - overlapStart;
       if (overlap < minLengthPx) continue;
 
-      // CRITICAL BEAM vs GRID CHECK:
-      // A true beam's two parallel edges terminate at the same column/beam faces!
-      // A grid line paired with a beam edge has a massive overshoot at one or both ends.
+      const midCoord = (c1.coord + c2.coord) / 2;
+
+      // Check if this pair straddles or sits on a parallel Grid Line!
+      const onParallelGrid = parallelGrids.some(
+        (g) => Math.abs(g.coord - midCoord) <= Math.max(gapPx * 0.85, 18)
+      );
+
+      // Check if this pair spans between or crosses perpendicular Grid Lines!
+      const snapped = snapEndpointsToPerpGrids(overlapStart, overlapEnd, orient);
+      const crossesPerpGrids = snapped.crossesGridCount >= 2;
+      const isGridGuided = onParallelGrid || crossesPerpGrids;
+
+      // Endpoint alignment check (more forgiving when confirmed by a Grid Line!)
       const startDiff = Math.abs(c1.start - c2.start);
       const endDiff = Math.abs(c1.end - c2.end);
-      const maxAllowedEndMismatch = Math.max(gapPx * 2.2, 35);
+      const maxAllowedEndMismatch = isGridGuided
+        ? Math.max(gapPx * 3.5, 65)
+        : Math.max(gapPx * 2.2, 35);
       const maxLen = Math.max(c1.length, c2.length);
       const overlapRatio = overlap / maxLen;
 
       if (startDiff > maxAllowedEndMismatch || endDiff > maxAllowedEndMismatch) {
         continue;
       }
-      if (overlapRatio < 0.72) {
+      if (overlapRatio < (isGridGuided ? 0.58 : 0.72)) {
         continue;
       }
 
-      // Aspect ratio check: beam length must be at least 2.5x its width
-      if (overlap < gapPx * 2.5) {
+      // Aspect ratio check
+      if (overlap < gapPx * 2.2) {
         continue;
       }
 
@@ -469,26 +799,33 @@ export function autoDetectBeamsWithDiagnostics(
       );
       if (hasInnerParallelLine) continue;
 
+      // Grid-guided pairs receive a strong priority bonus (lower score = better)
+      const gridBonus = (onParallelGrid ? -25 : 0) + (crossesPerpGrids ? -15 : 0);
       const score =
         Math.abs(gapPx - targetWidthPx) * 2.0 +
-        (startDiff + endDiff) * 0.8 +
-        Math.abs(c1.length - c2.length) * 0.4;
+        (startDiff + endDiff) * 0.6 +
+        Math.abs(c1.length - c2.length) * 0.3 +
+        gridBonus;
 
       if (score < bestScore) {
         bestScore = score;
         bestPartnerIdx = j;
-        const midCoord = (c1.coord + c2.coord) / 2;
+        const finalStart = crossesPerpGrids ? snapped.start : overlapStart;
+        const finalEnd = crossesPerpGrids ? snapped.end : overlapEnd;
+
         bestGeom =
           c1.orientation === 'horizontal'
             ? {
-                start: { x: overlapStart, y: midCoord },
-                end: { x: overlapEnd, y: midCoord },
+                start: { x: finalStart, y: midCoord },
+                end: { x: finalEnd, y: midCoord },
                 gapPx,
+                isGridGuided,
               }
             : {
-                start: { x: midCoord, y: overlapStart },
-                end: { x: midCoord, y: overlapEnd },
+                start: { x: midCoord, y: finalStart },
+                end: { x: midCoord, y: finalEnd },
                 gapPx,
+                isGridGuided,
               };
       }
     }
@@ -497,11 +834,19 @@ export function autoDetectBeamsWithDiagnostics(
       usedIndices.add(i);
       usedIndices.add(bestPartnerIdx);
 
-      const midX = (bestGeom.start.x + bestGeom.end.x) / 2;
-      const midY = (bestGeom.start.y + bestGeom.end.y) / 2;
-      const detectedLabel = findNearestBeamLabel(midX, midY, texts, usedLabelIndices);
+      const detectedLabel = findNearestBeamLabel(
+        bestGeom.start,
+        bestGeom.end,
+        orient,
+        texts,
+        usedLabelIndices
+      );
       const beamName = detectedLabel || `B${indexCounter++}`;
       const widthCm = Math.max(10, Math.round(bestGeom.gapPx / safeScale));
+
+      if (bestGeom.isGridGuided) {
+        counts.gridGuidedBeams++;
+      }
 
       beams.push(
         createBeamElement(beamName, bestGeom.start, bestGeom.end, defaultHeightCm, widthCm)
@@ -509,10 +854,131 @@ export function autoDetectBeamsWithDiagnostics(
     }
   }
 
+  // =========================================================================
+  // PASS 2: Single-Edge + Grid-Centerline Recovery (เมื่อเส้นกริดบังขอบคานด้านหนึ่ง หรือเจอขอบคานขนานติดกับเส้นกริด)
+  // If an unused beam_candidate runs parallel and adjacent to a known Grid Axis (within 4..26px),
+  // or a Beam Label (B1, GB1...) sits directly on a Grid Axis bay between two perpendicular grids,
+  // reconstruct the beam along that Grid Axis!
+  // =========================================================================
+  for (let i = 0; i < candidates.length; i++) {
+    if (usedIndices.has(i)) continue;
+    const c = candidates[i];
+    if (c.length < minLengthPx) continue;
+    if (c.orientation === 'diagonal') continue;
+
+    const parallelGrids = c.orientation === 'horizontal' ? gridAxes.horizontal : gridAxes.vertical;
+    const nearGrid = parallelGrids.find((g) => {
+      const dist = Math.abs(c.coord - g.coord);
+      return dist >= 3.5 && dist <= maxWidthPx * 0.65;
+    });
+
+    if (nearGrid) {
+      const snapped = snapEndpointsToPerpGrids(c.start, c.end, c.orientation);
+      const halfWidthPx = Math.max(6, Math.abs(c.coord - nearGrid.coord));
+      const estGapPx = Math.min(maxWidthPx, Math.max(minWidthPx, halfWidthPx * 2));
+      const beamCoord = nearGrid.coord;
+
+      const startPt: Point =
+        c.orientation === 'horizontal'
+          ? { x: snapped.start, y: beamCoord }
+          : { x: beamCoord, y: snapped.start };
+      const endPt: Point =
+        c.orientation === 'horizontal'
+          ? { x: snapped.end, y: beamCoord }
+          : { x: beamCoord, y: snapped.end };
+
+      if (!isDuplicateBeam(startPt, endPt, c.orientation)) {
+        usedIndices.add(i);
+        const detectedLabel = findNearestBeamLabel(
+          startPt,
+          endPt,
+          c.orientation,
+          texts,
+          usedLabelIndices
+        );
+        const beamName = detectedLabel || `B${indexCounter++}`;
+        const widthCm = Math.max(15, Math.round(estGapPx / safeScale));
+
+        counts.gridGuidedBeams++;
+        beams.push(createBeamElement(beamName, startPt, endPt, defaultHeightCm, widthCm));
+      }
+    }
+  }
+
+  // =========================================================================
+  // PASS 3: Grid-Intersection + Beam Tag Recovery (คานที่มีป้ายชื่อ B1/GB1 วางอยู่บนเส้นกริดระหว่างเสา)
+  // If a beam tag (e.g. "B1", "GB2") is next to a Grid Axis between two perpendicular Grid Axes,
+  // ensure that grid bay has a beam even if its solid lines were faint in the PDF scan.
+  // =========================================================================
+  for (let tIdx = 0; tIdx < texts.length; tIdx++) {
+    if (usedLabelIndices.has(tIdx)) continue;
+    const txt = texts[tIdx];
+    if (!isBeamTagText(txt.text)) continue;
+
+    // Find closest horizontal and vertical grid axes within 35px
+    const nearHGrid = gridAxes.horizontal
+      .filter((g) => Math.abs(txt.y - g.coord) <= 35)
+      .sort((a, b) => Math.abs(txt.y - a.coord) - Math.abs(txt.y - b.coord))[0];
+    const nearVGrid = gridAxes.vertical
+      .filter((g) => Math.abs(txt.x - g.coord) <= 35)
+      .sort((a, b) => Math.abs(txt.x - a.coord) - Math.abs(txt.x - b.coord))[0];
+
+    const distH = nearHGrid ? Math.abs(txt.y - nearHGrid.coord) : Infinity;
+    const distV = nearVGrid ? Math.abs(txt.x - nearVGrid.coord) : Infinity;
+
+    // Try whichever grid axis the label is closer to first
+    const tryHorizontal = (): boolean => {
+      if (!nearHGrid || gridAxes.vertical.length < 2) return false;
+      const leftGrids = gridAxes.vertical.filter((vg) => vg.coord < txt.x - 10);
+      const rightGrids = gridAxes.vertical.filter((vg) => vg.coord > txt.x + 10);
+      const vLeft = leftGrids[leftGrids.length - 1];
+      const vRight = rightGrids[0];
+
+      if (vLeft && vRight && vRight.coord - vLeft.coord >= minLengthPx) {
+        const startPt = { x: vLeft.coord, y: nearHGrid.coord };
+        const endPt = { x: vRight.coord, y: nearHGrid.coord };
+        if (!isDuplicateBeam(startPt, endPt, 'horizontal')) {
+          usedLabelIndices.add(tIdx);
+          counts.gridGuidedBeams++;
+          beams.push(createBeamElement(txt.text.trim(), startPt, endPt, defaultHeightCm, 20));
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const tryVertical = (): boolean => {
+      if (!nearVGrid || gridAxes.horizontal.length < 2) return false;
+      const topGrids = gridAxes.horizontal.filter((hg) => hg.coord < txt.y - 10);
+      const bottomGrids = gridAxes.horizontal.filter((hg) => hg.coord > txt.y + 10);
+      const hTop = topGrids[topGrids.length - 1];
+      const hBottom = bottomGrids[0];
+
+      if (hTop && hBottom && hBottom.coord - hTop.coord >= minLengthPx) {
+        const startPt = { x: nearVGrid.coord, y: hTop.coord };
+        const endPt = { x: nearVGrid.coord, y: hBottom.coord };
+        if (!isDuplicateBeam(startPt, endPt, 'vertical')) {
+          usedLabelIndices.add(tIdx);
+          counts.gridGuidedBeams++;
+          beams.push(createBeamElement(txt.text.trim(), startPt, endPt, defaultHeightCm, 20));
+          return true;
+        }
+      }
+      return false;
+    };
+
+    if (distV < distH) {
+      if (!tryVertical()) tryHorizontal();
+    } else {
+      if (!tryHorizontal()) tryVertical();
+    }
+  }
+
   counts.detectedBeams = beams.length;
   return {
     beams,
     classifiedLines,
+    gridAxes,
     counts,
   };
 }
