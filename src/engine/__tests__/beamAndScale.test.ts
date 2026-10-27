@@ -7,7 +7,6 @@ import {
 } from '../scaleCalibrator';
 import {
   autoDetectBeamsFromVectorLines,
-  createBeamElement,
   generateSampleBeamPlan,
 } from '../beamDetector';
 

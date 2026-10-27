@@ -4,9 +4,8 @@ import {
   applyAutoCornerExtensions,
   computeAllBeamPanels,
   computeRentalSummary,
-  findOptimalPanelCombination,
 } from '../formworkOptimizer';
-import { BeamElement, FORMWORK_THICKNESS_CM, getSkuTheme } from '../../types/formwork';
+import { BeamElement, FORMWORK_THICKNESS_CM } from '../../types/formwork';
 
 describe('formworkOptimizer', () => {
   it('always sets formwork thickness to 5 cm on every generated panel', () => {
