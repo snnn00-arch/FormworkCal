@@ -5,7 +5,7 @@ import {
   PlacedPanel,
   Point,
 } from '../types/formwork';
-import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { ZoomIn, ZoomOut, RotateCcw, Upload } from 'lucide-react';
 
 interface PlanCanvasProps {
   canvasRef: React.RefObject<HTMLCanvasElement>;
@@ -455,6 +455,23 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
           <span>
             {drawStart ? 'คลิกจุดสิ้นสุดของคาน' : 'คลิกจุดเริ่มต้นเพื่อวาดแนวคานใหม่'}
           </span>
+        </div>
+      )}
+
+      {/* Empty State Guide when no PDF and no beams exist */}
+      {!pdfImageUrl && beams.length === 0 && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none p-4">
+          <div className="bg-white/95 backdrop-blur-xs p-6 rounded-2xl border border-slate-200 shadow-sm text-center max-w-sm">
+            <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center mx-auto mb-3">
+              <Upload className="w-6 h-6" />
+            </div>
+            <h3 className="text-sm font-bold text-slate-800 mb-1">
+              เริ่มต้นคำนวณไม้แบบ
+            </h3>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              กดปุ่ม <span className="font-semibold text-blue-600">"นำเข้า PDF แปลนคาน"</span> ด้านบน ระบบจะอ่านสเกลและตรวจจับแนวคานพร้อมจัดเรียงไม้แบบให้อัตโนมัติทันที
+            </p>
+          </div>
         </div>
       )}
     </div>

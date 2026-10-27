@@ -1,7 +1,6 @@
 import React, { useRef } from 'react';
 import {
   Upload,
-  FileText,
   Sliders,
   Maximize2,
   MousePointer,
@@ -10,15 +9,16 @@ import {
   Download,
   Image as ImageIcon,
   ShieldCheck,
+  Scan,
 } from 'lucide-react';
 import { FORMWORK_HEIGHTS, FormworkHeight } from '../types/formwork';
 
 interface TopToolbarProps {
   onUploadPdf: (file: File) => void;
-  onLoadSamplePlan: () => void;
   scaleMode: 'none' | 'manual_p1' | 'manual_p2';
   onStartManualScale: () => void;
   onRunAutoScale: () => void;
+  onAutoDetectBeams: () => void;
   currentScale: number;
   scaleNote: string;
   defaultHeight: FormworkHeight;
@@ -32,10 +32,10 @@ interface TopToolbarProps {
 
 export const TopToolbar: React.FC<TopToolbarProps> = ({
   onUploadPdf,
-  onLoadSamplePlan,
   scaleMode,
   onStartManualScale,
   onRunAutoScale,
+  onAutoDetectBeams,
   currentScale,
   scaleNote,
   defaultHeight,
@@ -81,20 +81,11 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
 
         <button
           onClick={() => fileInputRef.current?.click()}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-slate-700 bg-white border border-[#E2E8F0] hover:bg-slate-50 transition-colors shadow-2xs"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 transition-colors shadow-xs"
           title="อัปโหลดไฟล์ PDF แปลนโครงสร้างคาน"
         >
-          <Upload className="w-3.5 h-3.5 text-slate-500" />
+          <Upload className="w-3.5 h-3.5 text-white" />
           <span>นำเข้า PDF แปลนคาน</span>
-        </button>
-
-        <button
-          onClick={onLoadSamplePlan}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-slate-600 bg-slate-50 border border-slate-200 hover:bg-slate-100 transition-colors"
-          title="ทดสอบด้วยแปลนคานตัวอย่าง"
-        >
-          <FileText className="w-3.5 h-3.5 text-slate-500" />
-          <span>แปลนตัวอย่าง</span>
         </button>
       </div>
 
@@ -181,7 +172,17 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           </button>
         </div>
 
-        {/* Auto Place Action */}
+        {/* Auto Detect Beams Action */}
+        <button
+          onClick={onAutoDetectBeams}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 active:scale-95 transition-all shadow-2xs"
+          title="สแกนอ่านแนวคานจากไฟล์ PDF และสร้างคานให้อัตโนมัติ"
+        >
+          <Scan className="w-3.5 h-3.5 text-blue-600" />
+          <span>สแกนตรวจจับคาน (Auto)</span>
+        </button>
+
+        {/* Auto Place Formwork Action */}
         <button
           onClick={onAutoPlaceFormwork}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 active:scale-95 transition-all shadow-xs"

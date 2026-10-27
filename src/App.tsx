@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   BeamElement,
   FormworkHeight,
@@ -18,7 +18,6 @@ import {
 import {
   autoDetectBeamsFromVectorLines,
   createBeamElement,
-  generateSampleBeamPlan,
 } from './engine/beamDetector';
 import {
   downloadCsvFile,
@@ -47,18 +46,6 @@ export const App: React.FC = () => {
   const [activeTool, setActiveTool] = useState<'select' | 'draw_beam'>('select');
   const [selectedBeamId, setSelectedBeamId] = useState<string | null>(null);
 
-  // Initialize with Sample Beam Plan on first load
-  useEffect(() => {
-    const sample = generateSampleBeamPlan();
-    setPixelsPerCm(sample.pixelsPerCm);
-    setVectorLines(sample.vectorLines);
-    setPlanTexts(sample.texts);
-    const optimized = applyAutoCornerExtensions(sample.beams, sample.pixelsPerCm);
-    setBeams(optimized);
-    setSelectedBeamId(optimized[0]?.id || null);
-    setScaleNote('โหลดแปลนตัวอย่างพร้อมจัดเรียงไม้แบบสำเร็จรูป');
-  }, []);
-
   // Compute Placed Panels and Rental Summary
   const panels = useMemo(() => {
     return computeAllBeamPanels(beams, pixelsPerCm);
@@ -76,12 +63,12 @@ export const App: React.FC = () => {
       setVectorLines(loaded.vectorLines);
       setPlanTexts(loaded.texts);
 
-      // Auto scale detection
+      // 1. Auto scale detection
       const scaleResult = autoDetectScaleFromPlanData(loaded.vectorLines, loaded.texts);
       setPixelsPerCm(scaleResult.pixelsPerCm);
       setScaleNote(scaleResult.confidence);
 
-      // If vectors detected, attempt auto beam detection
+      // 2. Auto beam detection and placement
       if (loaded.vectorLines.length > 0) {
         const detected = autoDetectBeamsFromVectorLines(
           loaded.vectorLines,
@@ -92,25 +79,46 @@ export const App: React.FC = () => {
           const withCorners = applyAutoCornerExtensions(detected, scaleResult.pixelsPerCm);
           setBeams(withCorners);
           setSelectedBeamId(withCorners[0]?.id || null);
+          alert(
+            `นำเข้า PDF สำเร็จ!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- ตรวจพบและสร้างแนวคานให้อัตโนมัติ: ${detected.length} คาน\n- คำนวณและจัดเรียงไม้แบบสำเร็จรูป (หนา 5 ซม.) แยกสีเรียบร้อยแล้ว`
+          );
+          return;
         }
       }
+
+      alert(
+        `นำเข้า PDF สำเร็จ!\n- ตั้งสเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม.\n- คุณสามารถกดปุ่ม "สแกนตรวจจับคาน (Auto)" หรือคลิกปุ่ม "วาดคาน" เพื่อสร้างแนวคานบนแปลนได้ทันทีครับ`
+      );
     } catch (err) {
       console.error('Failed to load PDF:', err);
       alert('ไม่สามารถเปิดไฟล์ PDF นี้ได้ กรุณาลองใช้ไฟล์ PDF แปลนอื่น');
     }
   };
 
-  const handleLoadSamplePlan = () => {
-    setPdfImageUrl(null);
-    const sample = generateSampleBeamPlan();
-    setPixelsPerCm(sample.pixelsPerCm);
-    setVectorLines(sample.vectorLines);
-    setPlanTexts(sample.texts);
-    const optimized = applyAutoCornerExtensions(sample.beams, sample.pixelsPerCm);
-    setBeams(optimized);
-    setSelectedBeamId(optimized[0]?.id || null);
-    setScaleNote('โหลดแปลนตัวอย่าง (2-Bay Floor Plan) พร้อมจัดเรียงไม้แบบ');
+  const handleAutoDetectBeams = () => {
+    if (!pdfImageUrl && vectorLines.length === 0) {
+      alert('กรุณานำเข้าไฟล์ PDF แปลนคานก่อนครับ');
+      return;
+    }
+    const detected = autoDetectBeamsFromVectorLines(
+      vectorLines,
+      pixelsPerCm,
+      defaultHeight
+    );
+    if (detected.length === 0) {
+      alert(
+        'ไม่พบคู่เส้นขนานคานที่ชัดเจนจากภาพสแกนนี้ คุณสามารถคลิกเลือกเครื่องมือ "วาดคาน" บนแถบด้านบน เพื่อคลิกสร้างแนวคานบนแปลนได้อย่างแม่นยำครับ'
+      );
+      return;
+    }
+    const withCorners = applyAutoCornerExtensions(detected, pixelsPerCm);
+    setBeams(withCorners);
+    setSelectedBeamId(withCorners[0]?.id || null);
+    alert(
+      `ระบบสแกนตรวจจับและสร้างคานจำลองให้อัตโนมัติ ${detected.length} ตัว พร้อมจัดเรียงไม้แบบ (หนา 5 ซม.) ครบทั้งสองฝั่งเรียบร้อยแล้ว!`
+    );
   };
+
 
   const handleRunAutoScale = () => {
     const scaleResult = autoDetectScaleFromPlanData(vectorLines, planTexts);
@@ -197,10 +205,10 @@ export const App: React.FC = () => {
       {/* Top Minimal Toolbar */}
       <TopToolbar
         onUploadPdf={handleUploadPdf}
-        onLoadSamplePlan={handleLoadSamplePlan}
         scaleMode={scaleMode}
         onStartManualScale={handleStartManualScale}
         onRunAutoScale={handleRunAutoScale}
+        onAutoDetectBeams={handleAutoDetectBeams}
         currentScale={pixelsPerCm}
         scaleNote={scaleNote}
         defaultHeight={defaultHeight}
