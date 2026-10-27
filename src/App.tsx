@@ -16,7 +16,7 @@ import {
   RawVectorLine,
 } from './engine/scaleCalibrator';
 import {
-  autoDetectBeamsFromVectorLines,
+  autoDetectBeamsWithDiagnostics,
   createBeamElement,
 } from './engine/beamDetector';
 import {
@@ -34,6 +34,9 @@ export const App: React.FC = () => {
 
   // Core State
   const [pdfImageUrl, setPdfImageUrl] = useState<string | null>(null);
+  const [pdfDimensions, setPdfDimensions] = useState<{ width: number; height: number } | undefined>(
+    undefined
+  );
   const [vectorLines, setVectorLines] = useState<RawVectorLine[]>([]);
   const [planTexts, setPlanTexts] = useState<RawTextItem[]>([]);
 
@@ -59,7 +62,9 @@ export const App: React.FC = () => {
   const handleUploadPdf = async (file: File) => {
     try {
       const loaded = await loadPdfFirstPage(file);
+      const dims = { width: loaded.width, height: loaded.height };
       setPdfImageUrl(loaded.imageDataUrl);
+      setPdfDimensions(dims);
       setVectorLines(loaded.vectorLines);
       setPlanTexts(loaded.texts);
 
@@ -68,20 +73,21 @@ export const App: React.FC = () => {
       setPixelsPerCm(scaleResult.pixelsPerCm);
       setScaleNote(scaleResult.confidence);
 
-      // 2. Auto beam detection and placement
+      // 2. Auto line classification + beam detection
       if (loaded.vectorLines.length > 0) {
-        const detected = autoDetectBeamsFromVectorLines(
+        const diag = autoDetectBeamsWithDiagnostics(
           loaded.vectorLines,
           scaleResult.pixelsPerCm,
           defaultHeight,
-          loaded.texts
+          loaded.texts,
+          dims
         );
-        if (detected.length > 0) {
-          const withCorners = applyAutoCornerExtensions(detected, scaleResult.pixelsPerCm);
+        if (diag.beams.length > 0) {
+          const withCorners = applyAutoCornerExtensions(diag.beams, scaleResult.pixelsPerCm);
           setBeams(withCorners);
           setSelectedBeamId(withCorners[0]?.id || null);
           alert(
-            `นำเข้า PDF สำเร็จ!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- ตรวจพบและวางแนวคานทับบนแปลนอัตโนมัติ: ${detected.length} คาน\n- คำนวณและจัดเรียงไม้แบบสำเร็จรูป (หนา 5 ซม.) แยกสีเรียบร้อยแล้ว`
+            `นำเข้า PDF สำเร็จ!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- จำแนกและตัดเส้นกรอบกระดาษ/ตาราง: ${diag.counts.borderOrTitleBlock} เส้น\n- จำแนกและตัดเส้นกริด/เส้นบอกระยะ: ${diag.counts.gridOrDimension} เส้น\n- ตรวจพบและวางแนวคานจริงทับบนแปลน: ${diag.beams.length} คาน`
           );
           return;
         }
@@ -101,23 +107,24 @@ export const App: React.FC = () => {
       alert('กรุณานำเข้าไฟล์ PDF แปลนคานก่อนครับ');
       return;
     }
-    const detected = autoDetectBeamsFromVectorLines(
+    const diag = autoDetectBeamsWithDiagnostics(
       vectorLines,
       pixelsPerCm,
       defaultHeight,
-      planTexts
+      planTexts,
+      pdfDimensions
     );
-    if (detected.length === 0) {
+    if (diag.beams.length === 0) {
       alert(
-        'ไม่พบคู่เส้นขนานคานที่ชัดเจนจากภาพสแกนนี้ คุณสามารถคลิกเลือกเครื่องมือ "วาดคาน" บนแถบด้านบน เพื่อคลิกสร้างแนวคานบนแปลนได้อย่างแม่นยำครับ'
+        `สแกนจำแนกเส้นเสร็จสิ้น:\n- ตัดกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- ตัดเส้นกริด/บอกระยะออก: ${diag.counts.gridOrDimension} เส้น\n- ไม่พบคู่เส้นขนานของคานที่ชัดเจน คุณสามารถใช้ปุ่ม "วาดคาน" คลิกสร้างแนวคานบนแปลนได้ทันทีครับ`
       );
       return;
     }
-    const withCorners = applyAutoCornerExtensions(detected, pixelsPerCm);
+    const withCorners = applyAutoCornerExtensions(diag.beams, pixelsPerCm);
     setBeams(withCorners);
     setSelectedBeamId(withCorners[0]?.id || null);
     alert(
-      `ระบบสแกนตรวจจับและสร้างคานจำลองให้อัตโนมัติ ${detected.length} ตัว พร้อมจัดเรียงไม้แบบ (หนา 5 ซม.) ครบทั้งสองฝั่งเรียบร้อยแล้ว!`
+      `สแกนและจำแนกเส้นสำเร็จ!\n- ตัดเส้นกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- ตัดเส้นกริด/เส้นบอกระยะออก: ${diag.counts.gridOrDimension} เส้น\n- สร้างคานจำลองทับตำแหน่งคานจริง: ${diag.beams.length} คาน พร้อมจัดเรียงไม้แบบ (หนา 5 ซม.) เรียบร้อยแล้ว!`
     );
   };
 

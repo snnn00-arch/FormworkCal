@@ -7,6 +7,8 @@ import {
 } from '../scaleCalibrator';
 import {
   autoDetectBeamsFromVectorLines,
+  autoDetectBeamsWithDiagnostics,
+  classifyPlanLines,
   generateSampleBeamPlan,
 } from '../beamDetector';
 
@@ -36,6 +38,51 @@ describe('scaleCalibrator & beamDetector', () => {
     expect(detected.length).toBe(2);
     expect(detected[0].thicknessCm).toBe(5);
     expect(detected[0].defaultHeightCm).toBe(50);
+  });
+
+  it('classifies and filters out paper border frames, title blocks, dashed grid lines, and dimension lines while detecting only real beams', () => {
+    const pageDimensions = { width: 1200, height: 900 };
+    const lines: RawVectorLine[] = [
+      // 1. Double-line paper border frame near sheet margins (should be border_or_titleblock)
+      { x1: 20, y1: 25, x2: 1180, y2: 25 },
+      { x1: 35, y1: 40, x2: 1165, y2: 40 },
+      { x1: 20, y1: 875, x2: 1180, y2: 875 },
+      { x1: 20, y1: 25, x2: 20, y2: 875 },
+      { x1: 1180, y1: 25, x2: 1180, y2: 875 },
+
+      // 2. Dashed / collinear centerline grid line along y = 300 (4 short dashes -> grid_or_dimension)
+      { x1: 120, y1: 300, x2: 200, y2: 300 },
+      { x1: 230, y1: 300, x2: 310, y2: 300 },
+      { x1: 340, y1: 300, x2: 420, y2: 300 },
+      { x1: 450, y1: 300, x2: 530, y2: 300 },
+
+      // 3. Exterior dimension line with "4.00" label (should be grid_or_dimension)
+      { x1: 200, y1: 140, x2: 600, y2: 140 },
+      { x1: 200, y1: 160, x2: 600, y2: 160 },
+
+      // 4. True structural beam B1 (parallel edges at y = 290 and y = 310, aligned from x = 200 to 600)
+      { x1: 200, y1: 290, x2: 600, y2: 290 },
+      { x1: 200, y1: 310, x2: 600, y2: 310 },
+
+      // 5. Single full-span grid line shooting across the drawing with mismatching length (should not pair with beam)
+      { x1: 80, y1: 480, x2: 1050, y2: 480 },
+    ];
+
+    const texts: RawTextItem[] = [
+      { text: '4.00', x: 400, y: 138 },
+      { text: '4.00', x: 400, y: 158 },
+      { text: 'B1', x: 400, y: 300 },
+    ];
+
+    const classified = classifyPlanLines(lines, texts, pageDimensions);
+    expect(classified.filter((c) => c.category === 'border_or_titleblock').length).toBe(5);
+    expect(classified.filter((c) => c.category === 'grid_or_dimension').length).toBeGreaterThanOrEqual(6);
+
+    const diag = autoDetectBeamsWithDiagnostics(lines, 1.0, 60, texts, pageDimensions);
+    expect(diag.beams.length).toBe(1);
+    expect(diag.beams[0].name).toBe('B1');
+    expect(diag.beams[0].start).toEqual({ x: 200, y: 300 });
+    expect(diag.beams[0].end).toEqual({ x: 600, y: 300 });
   });
 
   it('generates a realistic sample beam plan with multiple heights (40, 50, 60, 70 cm)', () => {

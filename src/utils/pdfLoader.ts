@@ -76,11 +76,11 @@ export function extractLinesFromImageData(
     return lum < 215;
   };
 
-  // Ignore outer 2.5% page border frame
-  const marginX = Math.max(12, Math.round(width * 0.025));
-  const marginY = Math.max(12, Math.round(height * 0.025));
+  // Ignore outer 4% page border margin
+  const marginX = Math.max(16, Math.round(width * 0.04));
+  const marginY = Math.max(16, Math.round(height * 0.04));
   const minLineLen = 45;
-  const maxGapBridge = 3; // bridge 1-3px anti-alias or crossing gaps
+  const maxGapBridge = 2; // bridge 1-2px anti-alias crossing gaps only, never bridge dashed grid gaps
 
   const rawHoriz: Segment1D[] = [];
   const rawVert: Segment1D[] = [];
@@ -99,8 +99,8 @@ export function extractLinesFromImageData(
       } else if (startX !== -1 && x - lastStrokeX > maxGapBridge) {
         const totalLen = lastStrokeX - startX + 1;
         const fillRatio = strokeCount / totalLen;
-        // Require >= 0.78 fill ratio to reject dashed grid lines (- - - -)
-        if (totalLen >= minLineLen && fillRatio >= 0.78) {
+        // Require >= 0.85 fill ratio to reject dashed/centerline grid lines (- - - -)
+        if (totalLen >= minLineLen && fillRatio >= 0.85) {
           rawHoriz.push({ coord: y, start: startX, end: lastStrokeX });
         }
         startX = -1;
@@ -111,7 +111,7 @@ export function extractLinesFromImageData(
     if (startX !== -1) {
       const totalLen = lastStrokeX - startX + 1;
       const fillRatio = strokeCount / totalLen;
-      if (totalLen >= minLineLen && fillRatio >= 0.78) {
+      if (totalLen >= minLineLen && fillRatio >= 0.85) {
         rawHoriz.push({ coord: y, start: startX, end: lastStrokeX });
       }
     }
@@ -131,7 +131,7 @@ export function extractLinesFromImageData(
       } else if (startY !== -1 && y - lastStrokeY > maxGapBridge) {
         const totalLen = lastStrokeY - startY + 1;
         const fillRatio = strokeCount / totalLen;
-        if (totalLen >= minLineLen && fillRatio >= 0.78) {
+        if (totalLen >= minLineLen && fillRatio >= 0.85) {
           rawVert.push({ coord: x, start: startY, end: lastStrokeY });
         }
         startY = -1;
@@ -142,23 +142,23 @@ export function extractLinesFromImageData(
     if (startY !== -1) {
       const totalLen = lastStrokeY - startY + 1;
       const fillRatio = strokeCount / totalLen;
-      if (totalLen >= minLineLen && fillRatio >= 0.78) {
+      if (totalLen >= minLineLen && fillRatio >= 0.85) {
         rawVert.push({ coord: x, start: startY, end: lastStrokeY });
       }
     }
   }
 
-  const mergedHoriz = mergeAdjacentSegments(rawHoriz, 3.5);
-  const mergedVert = mergeAdjacentSegments(rawVert, 3.5);
+  const mergedHoriz = mergeAdjacentSegments(rawHoriz, 3.0);
+  const mergedVert = mergeAdjacentSegments(rawVert, 3.0);
 
   const lines: RawVectorLine[] = [];
   for (const h of mergedHoriz) {
-    // Reject full-page border lines (> 90% of page width)
-    if (h.end - h.start > width * 0.9) continue;
+    // Reject full-page border lines (> 75% of page width)
+    if (h.end - h.start > width * 0.75) continue;
     lines.push({ x1: h.start, y1: h.coord, x2: h.end, y2: h.coord });
   }
   for (const v of mergedVert) {
-    if (v.end - v.start > height * 0.9) continue;
+    if (v.end - v.start > height * 0.75) continue;
     lines.push({ x1: v.coord, y1: v.start, x2: v.coord, y2: v.end });
   }
 
