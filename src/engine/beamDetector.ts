@@ -39,17 +39,49 @@ export function createBeamElement(
   };
 }
 
+function findNearestBeamLabel(
+  midX: number,
+  midY: number,
+  texts: RawTextItem[],
+  usedLabels: Set<number>
+): string | null {
+  let bestIdx = -1;
+  let bestDist = 75; // within 75 px of beam midpoint
+
+  for (let i = 0; i < texts.length; i++) {
+    if (usedLabels.has(i)) continue;
+    const t = texts[i].text.trim();
+    // Match structural beam tags such as B1, B2, GB1, FB1, RB1, CB1, WB1, B-1
+    if (!/^(?:G?B|FB|RB|CB|WB|SB)[-_\s]?\d+[A-Z]?$/i.test(t)) continue;
+    const d = Math.hypot(texts[i].x - midX, texts[i].y - midY);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = i;
+    }
+  }
+
+  if (bestIdx !== -1) {
+    usedLabels.add(bestIdx);
+    return texts[bestIdx].text.trim();
+  }
+  return null;
+}
+
 export function autoDetectBeamsFromVectorLines(
   lines: RawVectorLine[],
   pixelsPerCm: number,
-  defaultHeightCm: FormworkHeight = 60
+  defaultHeightCm: FormworkHeight = 60,
+  texts: RawTextItem[] = []
 ): BeamElement[] {
   const safeScale = pixelsPerCm > 0 ? pixelsPerCm : 1;
-  const minWidthPx = 12 * safeScale;
-  const maxWidthPx = 45 * safeScale;
-  const minLengthPx = 60 * safeScale;
+  // Support both zoomed-out (1:100) and zoomed-in (1:50) PDF plans
+  const minWidthPx = Math.max(5, 8 * safeScale);
+  const maxWidthPx = Math.max(42, 45 * safeScale);
+  const minLengthPx = Math.max(45, 50 * safeScale);
+  const targetWidthPx = 20 * safeScale;
 
   const usedIndices = new Set<number>();
+  const usedLabelIndices = new Set<number>();
   const beams: BeamElement[] = [];
   let indexCounter = 1;
 
@@ -59,9 +91,13 @@ export function autoDetectBeamsFromVectorLines(
     const len1 = Math.hypot(l1.x2 - l1.x1, l1.y2 - l1.y1);
     if (len1 < minLengthPx) continue;
 
-    const isHoriz1 = Math.abs(l1.y2 - l1.y1) <= Math.abs(l1.x2 - l1.x1) * 0.15;
-    const isVert1 = Math.abs(l1.x2 - l1.x1) <= Math.abs(l1.y2 - l1.y1) * 0.15;
+    const isHoriz1 = Math.abs(l1.y2 - l1.y1) <= Math.abs(l1.x2 - l1.x1) * 0.12;
+    const isVert1 = Math.abs(l1.x2 - l1.x1) <= Math.abs(l1.y2 - l1.y1) * 0.12;
     if (!isHoriz1 && !isVert1) continue;
+
+    let bestPartnerIdx = -1;
+    let bestScore = Infinity;
+    let bestBeamGeom: { start: Point; end: Point; gapPx: number } | null = null;
 
     for (let j = i + 1; j < lines.length; j++) {
       if (usedIndices.has(j)) continue;
@@ -70,66 +106,91 @@ export function autoDetectBeamsFromVectorLines(
       if (len2 < minLengthPx) continue;
 
       if (isHoriz1) {
-        const isHoriz2 = Math.abs(l2.y2 - l2.y1) <= Math.abs(l2.x2 - l2.x1) * 0.15;
+        const isHoriz2 = Math.abs(l2.y2 - l2.y1) <= Math.abs(l2.x2 - l2.x1) * 0.12;
         if (!isHoriz2) continue;
+
         const y1 = (l1.y1 + l1.y2) / 2;
         const y2 = (l2.y1 + l2.y2) / 2;
         const gapPx = Math.abs(y1 - y2);
+        if (gapPx < minWidthPx || gapPx > maxWidthPx) continue;
+
         const minX1 = Math.min(l1.x1, l1.x2);
         const maxX1 = Math.max(l1.x1, l1.x2);
         const minX2 = Math.min(l2.x1, l2.x2);
         const maxX2 = Math.max(l2.x1, l2.x2);
-        const overlap = Math.min(maxX1, maxX2) - Math.max(minX1, minX2);
+        const overlapStart = Math.max(minX1, minX2);
+        const overlapEnd = Math.min(maxX1, maxX2);
+        const overlap = overlapEnd - overlapStart;
+        const minSegLen = Math.min(len1, len2);
 
-        if (gapPx >= minWidthPx && gapPx <= maxWidthPx && overlap >= minLengthPx * 0.7) {
-          usedIndices.add(i);
-          usedIndices.add(j);
-          const midY = (y1 + y2) / 2;
-          const startX = Math.max(minX1, minX2);
-          const endX = Math.min(maxX1, maxX2);
-          const widthCm = Math.round(gapPx / safeScale);
-          beams.push(
-            createBeamElement(
-              `B${indexCounter++}`,
-              { x: startX, y: midY },
-              { x: endX, y: midY },
-              defaultHeightCm,
-              widthCm
-            )
-          );
-          break;
+        if (overlap >= minLengthPx && overlap >= minSegLen * 0.65) {
+          // Prefer gap closest to 20cm beam width and high length similarity
+          const score =
+            Math.abs(gapPx - targetWidthPx) * 2 + Math.abs(len1 - len2) * 0.25;
+          if (score < bestScore) {
+            bestScore = score;
+            bestPartnerIdx = j;
+            const midY = (y1 + y2) / 2;
+            bestBeamGeom = {
+              start: { x: overlapStart, y: midY },
+              end: { x: overlapEnd, y: midY },
+              gapPx,
+            };
+          }
         }
       } else if (isVert1) {
-        const isVert2 = Math.abs(l2.x2 - l2.x1) <= Math.abs(l2.y2 - l2.y1) * 0.15;
+        const isVert2 = Math.abs(l2.x2 - l2.x1) <= Math.abs(l2.y2 - l2.y1) * 0.12;
         if (!isVert2) continue;
+
         const x1 = (l1.x1 + l1.x2) / 2;
         const x2 = (l2.x1 + l2.x2) / 2;
         const gapPx = Math.abs(x1 - x2);
+        if (gapPx < minWidthPx || gapPx > maxWidthPx) continue;
+
         const minY1 = Math.min(l1.y1, l1.y2);
         const maxY1 = Math.max(l1.y1, l1.y2);
         const minY2 = Math.min(l2.y1, l2.y2);
         const maxY2 = Math.max(l2.y1, l2.y2);
-        const overlap = Math.min(maxY1, maxY2) - Math.max(minY1, minY2);
+        const overlapStart = Math.max(minY1, minY2);
+        const overlapEnd = Math.min(maxY1, maxY2);
+        const overlap = overlapEnd - overlapStart;
+        const minSegLen = Math.min(len1, len2);
 
-        if (gapPx >= minWidthPx && gapPx <= maxWidthPx && overlap >= minLengthPx * 0.7) {
-          usedIndices.add(i);
-          usedIndices.add(j);
-          const midX = (x1 + x2) / 2;
-          const startY = Math.max(minY1, minY2);
-          const endY = Math.min(maxY1, maxY2);
-          const widthCm = Math.round(gapPx / safeScale);
-          beams.push(
-            createBeamElement(
-              `B${indexCounter++}`,
-              { x: midX, y: startY },
-              { x: midX, y: endY },
-              defaultHeightCm,
-              widthCm
-            )
-          );
-          break;
+        if (overlap >= minLengthPx && overlap >= minSegLen * 0.65) {
+          const score =
+            Math.abs(gapPx - targetWidthPx) * 2 + Math.abs(len1 - len2) * 0.25;
+          if (score < bestScore) {
+            bestScore = score;
+            bestPartnerIdx = j;
+            const midX = (x1 + x2) / 2;
+            bestBeamGeom = {
+              start: { x: midX, y: overlapStart },
+              end: { x: midX, y: overlapEnd },
+              gapPx,
+            };
+          }
         }
       }
+    }
+
+    if (bestPartnerIdx !== -1 && bestBeamGeom) {
+      usedIndices.add(i);
+      usedIndices.add(bestPartnerIdx);
+      const midX = (bestBeamGeom.start.x + bestBeamGeom.end.x) / 2;
+      const midY = (bestBeamGeom.start.y + bestBeamGeom.end.y) / 2;
+      const detectedLabel = findNearestBeamLabel(midX, midY, texts, usedLabelIndices);
+      const beamName = detectedLabel || `B${indexCounter++}`;
+      const widthCm = Math.max(10, Math.round(bestBeamGeom.gapPx / safeScale));
+
+      beams.push(
+        createBeamElement(
+          beamName,
+          bestBeamGeom.start,
+          bestBeamGeom.end,
+          defaultHeightCm,
+          widthCm
+        )
+      );
     }
   }
 
@@ -142,15 +203,12 @@ export function generateSampleBeamPlan(): {
   vectorLines: RawVectorLine[];
   texts: RawTextItem[];
 } {
-  const pixelsPerCm = 1.2; // 1 cm = 1.2 px
-  // 2-bay structural floor beam plan:
-  // Bay X1: 400 cm (480 px), Bay X2: 350 cm (420 px)
-  // Bay Y1: 300 cm (360 px)
+  const pixelsPerCm = 1.2;
   const x0 = 120;
-  const x1 = x0 + 400 * pixelsPerCm; // 600
-  const x2 = x1 + 350 * pixelsPerCm; // 1020
+  const x1 = x0 + 400 * pixelsPerCm;
+  const x2 = x1 + 350 * pixelsPerCm;
   const y0 = 120;
-  const y1 = y0 + 300 * pixelsPerCm; // 480
+  const y1 = y0 + 300 * pixelsPerCm;
 
   const beams: BeamElement[] = [
     createBeamElement('B1 (บนซ้าย)', { x: x0, y: y0 }, { x: x1, y: y0 }, 60, 20),
@@ -164,7 +222,6 @@ export function generateSampleBeamPlan(): {
 
   const halfW = 10 * pixelsPerCm;
   const vectorLines: RawVectorLine[] = [
-    // Dimension reference line for 4.00 m
     { x1: x0, y1: y0 - 45, x2: x1, y2: y0 - 45 },
     { x1: x1, y1: y0 - 45, x2: x2, y2: y0 - 45 },
   ];

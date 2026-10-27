@@ -73,14 +73,15 @@ export const App: React.FC = () => {
         const detected = autoDetectBeamsFromVectorLines(
           loaded.vectorLines,
           scaleResult.pixelsPerCm,
-          defaultHeight
+          defaultHeight,
+          loaded.texts
         );
         if (detected.length > 0) {
           const withCorners = applyAutoCornerExtensions(detected, scaleResult.pixelsPerCm);
           setBeams(withCorners);
           setSelectedBeamId(withCorners[0]?.id || null);
           alert(
-            `นำเข้า PDF สำเร็จ!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- ตรวจพบและสร้างแนวคานให้อัตโนมัติ: ${detected.length} คาน\n- คำนวณและจัดเรียงไม้แบบสำเร็จรูป (หนา 5 ซม.) แยกสีเรียบร้อยแล้ว`
+            `นำเข้า PDF สำเร็จ!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- ตรวจพบและวางแนวคานทับบนแปลนอัตโนมัติ: ${detected.length} คาน\n- คำนวณและจัดเรียงไม้แบบสำเร็จรูป (หนา 5 ซม.) แยกสีเรียบร้อยแล้ว`
           );
           return;
         }
@@ -103,7 +104,8 @@ export const App: React.FC = () => {
     const detected = autoDetectBeamsFromVectorLines(
       vectorLines,
       pixelsPerCm,
-      defaultHeight
+      defaultHeight,
+      planTexts
     );
     if (detected.length === 0) {
       alert(

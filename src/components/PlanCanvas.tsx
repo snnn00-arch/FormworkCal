@@ -57,8 +57,22 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     }
     const img = new Image();
     img.src = pdfImageUrl;
-    img.onload = () => setPdfImage(img);
-  }, [pdfImageUrl]);
+    img.onload = () => {
+      setPdfImage(img);
+      const canvas = canvasRef.current;
+      if (canvas && img.width > 0 && img.height > 0) {
+        const cw = canvas.clientWidth || 900;
+        const ch = canvas.clientHeight || 650;
+        const fitZoom = Math.min(cw / img.width, ch / img.height) * 0.92;
+        const clampedZoom = Math.min(Math.max(fitZoom, 0.25), 2.5);
+        setZoom(clampedZoom);
+        setPan({
+          x: Math.round((cw - img.width * clampedZoom) / 2),
+          y: Math.round((ch - img.height * clampedZoom) / 2),
+        });
+      }
+    };
+  }, [pdfImageUrl, canvasRef]);
 
   // Convert screen coordinates to world/plan coordinates
   const screenToWorld = (clientX: number, clientY: number): Point => {
@@ -118,7 +132,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       ctx.drawImage(pdfImage, 0, 0);
     }
 
-    // 3. Draw Beams
+    // 3. Draw Beams (translucent overlay directly on top of PDF plan)
     for (const beam of beams) {
       const isSelected = beam.id === selectedBeamId;
       const bDx = beam.end.x - beam.start.x;
@@ -131,9 +145,9 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
 
       const halfW = (beam.widthCm * pixelsPerCm) / 2;
 
-      // Beam Body
-      ctx.fillStyle = isSelected ? '#EFF6FF' : '#F8FAFC';
-      ctx.strokeStyle = isSelected ? '#3B82F6' : '#94A3B8';
+      // Translucent Beam Body so underlying PDF beam lines remain visible
+      ctx.fillStyle = isSelected ? 'rgba(59, 130, 246, 0.22)' : 'rgba(148, 163, 184, 0.16)';
+      ctx.strokeStyle = isSelected ? '#2563EB' : '#64748B';
       ctx.lineWidth = (isSelected ? 2 : 1) / zoom;
 
       ctx.beginPath();
@@ -146,7 +160,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       ctx.stroke();
 
       // Beam Centerline
-      ctx.strokeStyle = isSelected ? '#60A5FA' : '#CBD5E1';
+      ctx.strokeStyle = isSelected ? '#3B82F6' : '#94A3B8';
       ctx.lineWidth = 1 / zoom;
       ctx.setLineDash([4 / zoom, 4 / zoom]);
       ctx.beginPath();
@@ -158,7 +172,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       // Beam Label
       const midX = (beam.start.x + beam.end.x) / 2;
       const midY = (beam.start.y + beam.end.y) / 2;
-      ctx.fillStyle = isSelected ? '#1D4ED8' : '#334155';
+      ctx.fillStyle = isSelected ? '#1D4ED8' : '#0F172A';
       ctx.font = `600 ${Math.max(10, 11 / zoom)}px "Plus Jakarta Sans", sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -222,7 +236,9 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       ctx.lineTo(p3x, p3y);
       ctx.lineTo(p4x, p4y);
       ctx.closePath();
+      ctx.globalAlpha = 0.85;
       ctx.fill();
+      ctx.globalAlpha = 1.0;
       ctx.stroke();
       ctx.setLineDash([]);
 
