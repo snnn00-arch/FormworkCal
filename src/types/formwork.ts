@@ -202,6 +202,12 @@ export interface BeamElement {
    */
   attachMode?: 'single_edge' | 'dual_beam';
   edgeRole?: 'inner' | 'outer';
+  /**
+   * When present, this edge belongs to a 4-corner adjustable rectangle group (วงรอบในจับขอบ 4 มุม).
+   * Clicking "Ungroup" clears boxGroupId and boxSide so the 4 edges become independent single lines.
+   */
+  boxGroupId?: string;
+  boxSide?: 'top' | 'right' | 'bottom' | 'left';
   leftSide: BeamSideConfig;
   rightSide: BeamSideConfig;
 }

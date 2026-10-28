@@ -14,6 +14,7 @@ import {
   Trash2,
   RotateCcw,
   AlertCircle,
+  Scissors,
 } from 'lucide-react';
 
 interface RightSidebarProps {
@@ -24,6 +25,7 @@ interface RightSidebarProps {
   onUpdateBeam: (updated: BeamElement) => void;
   onDeleteBeam: (beamId: string) => void;
   onResetBeamToAuto: (beamId: string) => void;
+  onUngroupBox?: (boxGroupId: string) => void;
 }
 
 export const RightSidebar: React.FC<RightSidebarProps> = ({
@@ -34,6 +36,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   onUpdateBeam,
   onDeleteBeam,
   onResetBeamToAuto,
+  onUngroupBox,
 }) => {
   const [activeTab, setActiveTab] = useState<'summary' | 'edit' | 'colors'>('summary');
   const selectedBeam = beams.find((b) => b.id === selectedBeamId);
@@ -353,6 +356,31 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                 {/* Single-Edge Mode Quick Flip Side + Corner Extensions */}
                 {selectedBeam.attachMode === 'single_edge' ? (
                   <div className="space-y-3">
+                    {/* 4-Corner Box Group Card with Ungroup Action */}
+                    {selectedBeam.boxGroupId && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="text-[11px] font-bold text-amber-900 block">
+                              สี่เหลี่ยมวงรอบใน (จับขอบ 4 มุม)
+                            </span>
+                            <span className="text-[10px] text-amber-700">
+                              ลากมุมทั้ง 4 บนแปลนเพื่อปรับขนาด • ไม้แบบจัดออโต้ภายใน
+                            </span>
+                          </div>
+                        </div>
+                        {onUngroupBox && (
+                          <button
+                            onClick={() => onUngroupBox(selectedBeam.boxGroupId!)}
+                            className="w-full py-1.5 px-2 rounded-md bg-white hover:bg-amber-100 border border-amber-300 text-amber-900 font-semibold text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                          >
+                            <Scissors className="w-3.5 h-3.5 text-amber-700" />
+                            <span>แยกกลุ่มเป็นเส้นเดี่ยว (Ungroup)</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
+
                     <div className="bg-indigo-50/70 border border-indigo-200 rounded-lg p-2.5 flex items-center justify-between">
                       <div>
                         <span className="text-[11px] font-bold text-indigo-900 block">

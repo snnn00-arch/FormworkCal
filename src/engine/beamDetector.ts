@@ -99,7 +99,9 @@ export function createFormworkEdgeElement(
   edgeRole: 'inner' | 'outer' = 'inner',
   widthCm: number = DEFAULT_BEAM_WIDTH_CM,
   startExtensionCm = 0,
-  endExtensionCm = 0
+  endExtensionCm = 0,
+  boxGroupId?: string,
+  boxSide?: 'top' | 'right' | 'bottom' | 'left'
 ): BeamElement {
   const id = `edge-${Date.now()}-${beamCounter++}`;
   return {
@@ -112,6 +114,8 @@ export function createFormworkEdgeElement(
     thicknessCm: FORMWORK_THICKNESS_CM,
     attachMode: 'single_edge',
     edgeRole,
+    boxGroupId,
+    boxSide,
     leftSide: {
       side: 'left',
       enabled: activeSide === 'left',
@@ -127,6 +131,63 @@ export function createFormworkEdgeElement(
       endExtensionCm: activeSide === 'right' ? endExtensionCm : 0,
     },
   };
+}
+
+/**
+ * Updates all 4 edges belonging to a 4-corner rectangle group (วงรอบในจับขอบ 4 มุม)
+ * when the user drags any of its 4 corner handles, so formwork panels auto-arrange inside!
+ */
+export function updateBoxGroupRectangle(
+  beams: BeamElement[],
+  boxGroupId: string,
+  p1: Point,
+  p2: Point
+): BeamElement[] {
+  const minX = Math.min(p1.x, p2.x);
+  const maxX = Math.max(p1.x, p2.x);
+  const minY = Math.min(p1.y, p2.y);
+  const maxY = Math.max(p1.y, p2.y);
+
+  if (maxX - minX < 15 || maxY - minY < 15) {
+    return beams;
+  }
+
+  return beams.map((b) => {
+    if (b.boxGroupId !== boxGroupId) return b;
+    let newStart = b.start;
+    let newEnd = b.end;
+    if (b.boxSide === 'top') {
+      newStart = { x: minX, y: minY };
+      newEnd = { x: maxX, y: minY };
+    } else if (b.boxSide === 'right') {
+      newStart = { x: maxX, y: minY };
+      newEnd = { x: maxX, y: maxY };
+    } else if (b.boxSide === 'bottom') {
+      newStart = { x: maxX, y: maxY };
+      newEnd = { x: minX, y: maxY };
+    } else if (b.boxSide === 'left') {
+      newStart = { x: minX, y: maxY };
+      newEnd = { x: minX, y: minY };
+    }
+    return {
+      ...b,
+      start: newStart,
+      end: newEnd,
+      leftSide: { ...b.leftSide, customPanels: undefined },
+      rightSide: { ...b.rightSide, customPanels: undefined },
+    };
+  });
+}
+
+/**
+ * Ungroups a 4-corner rectangle loop into 4 independent formwork lines (ตั้งไม้แบบเป็นเส้นๆ เหมือนเดิม).
+ */
+export function ungroupBoxEdges(beams: BeamElement[], boxGroupId: string): BeamElement[] {
+  return beams.map((b) =>
+    b.boxGroupId === boxGroupId
+      ? { ...b, boxGroupId: undefined, boxSide: undefined }
+      : b
+  );
 }
 
 /**
@@ -261,9 +322,10 @@ export function createEdgesFromLineTool(
 /**
  * Creates a 4-sided rectangular loop of Formwork Edge Lines from 2 corner clicks:
  * - role === 'inner': User clicked the INNER slab opening rectangle (วงรอบใน).
- *   Inner 4 edges have exact inner dimensions; if autoParallelPair is true, outer 4 edges are expanded by +beamWidthCm (20 cm) on all sides + 5 cm corner wrap.
+ *   Inner 4 edges have exact inner dimensions and are grouped into a 4-corner adjustable rectangle (boxGroupId);
+ *   if autoParallelPair is true, outer 4 edges are expanded by +beamWidthCm (20 cm) on all sides + 5 cm corner wrap.
  * - role === 'outer': User clicked the OUTER building/bay perimeter rectangle (วงรอบนอก).
- *   Outer 4 edges have exact outer dimensions + 5 cm corner wrap; if autoParallelPair is true, inner 4 edges are inset by -beamWidthCm (20 cm) on all sides.
+ *   Outer 4 edges have exact outer dimensions; if autoParallelPair is true, inner 4 edges are inset by -beamWidthCm (20 cm) on all sides.
  */
 export function createEdgesFromBoxTool(
   basePrefix: string,
@@ -297,6 +359,7 @@ export function createEdgesFromBoxTool(
 
   const addInnerLoop = () => {
     if (inMaxX - inMinX < 15 || inMaxY - inMinY < 15) return;
+    const innerGroupId = `box-inner-${basePrefix}-${beamCounter}`;
     // Clockwise loop in screen coordinates (+Y down): 'left' points INWARD into the box!
     // Horizontal inner strips span full inner width (0, 0); Vertical inner strips butt between them (-5cm, -5cm) so corners never overlap!
     edges.push(
@@ -309,7 +372,9 @@ export function createEdgesFromBoxTool(
         'inner',
         beamWidthCm,
         0,
-        0
+        0,
+        innerGroupId,
+        'top'
       ),
       createFormworkEdgeElement(
         `${basePrefix}-ขวา(ใน)`,
@@ -320,7 +385,9 @@ export function createEdgesFromBoxTool(
         'inner',
         beamWidthCm,
         -FORMWORK_THICKNESS_CM,
-        -FORMWORK_THICKNESS_CM
+        -FORMWORK_THICKNESS_CM,
+        innerGroupId,
+        'right'
       ),
       createFormworkEdgeElement(
         `${basePrefix}-ล่าง(ใน)`,
@@ -331,7 +398,9 @@ export function createEdgesFromBoxTool(
         'inner',
         beamWidthCm,
         0,
-        0
+        0,
+        innerGroupId,
+        'bottom'
       ),
       createFormworkEdgeElement(
         `${basePrefix}-ซ้าย(ใน)`,
@@ -342,13 +411,16 @@ export function createEdgesFromBoxTool(
         'inner',
         beamWidthCm,
         -FORMWORK_THICKNESS_CM,
-        -FORMWORK_THICKNESS_CM
+        -FORMWORK_THICKNESS_CM,
+        innerGroupId,
+        'left'
       )
     );
   };
 
   const addOuterLoop = () => {
     if (outMaxX - outMinX < 15 || outMaxY - outMinY < 15) return;
+    const outerGroupId = `box-outer-${basePrefix}-${beamCounter}`;
     if (role === 'outer') {
       // When user explicitly draws Outer Box (ตีกรอบวงนอก), use 'left' (inward in clockwise screen coords) so 100% of formwork stays INSIDE [outMinX..outMaxX, outMinY..outMaxY]!
       edges.push(
@@ -361,7 +433,9 @@ export function createEdgesFromBoxTool(
           'outer',
           beamWidthCm,
           0,
-          0
+          0,
+          outerGroupId,
+          'top'
         ),
         createFormworkEdgeElement(
           `${basePrefix}-ขวา(นอก)`,
@@ -372,7 +446,9 @@ export function createEdgesFromBoxTool(
           'outer',
           beamWidthCm,
           -FORMWORK_THICKNESS_CM,
-          -FORMWORK_THICKNESS_CM
+          -FORMWORK_THICKNESS_CM,
+          outerGroupId,
+          'right'
         ),
         createFormworkEdgeElement(
           `${basePrefix}-ล่าง(นอก)`,
@@ -383,7 +459,9 @@ export function createEdgesFromBoxTool(
           'outer',
           beamWidthCm,
           0,
-          0
+          0,
+          outerGroupId,
+          'bottom'
         ),
         createFormworkEdgeElement(
           `${basePrefix}-ซ้าย(นอก)`,
@@ -394,7 +472,9 @@ export function createEdgesFromBoxTool(
           'outer',
           beamWidthCm,
           -FORMWORK_THICKNESS_CM,
-          -FORMWORK_THICKNESS_CM
+          -FORMWORK_THICKNESS_CM,
+          outerGroupId,
+          'left'
         )
       );
     } else {
@@ -410,7 +490,9 @@ export function createEdgesFromBoxTool(
           'outer',
           beamWidthCm,
           FORMWORK_THICKNESS_CM,
-          FORMWORK_THICKNESS_CM
+          FORMWORK_THICKNESS_CM,
+          outerGroupId,
+          'top'
         ),
         createFormworkEdgeElement(
           `${basePrefix}-ขวา(นอก)`,
@@ -421,7 +503,9 @@ export function createEdgesFromBoxTool(
           'outer',
           beamWidthCm,
           0,
-          0
+          0,
+          outerGroupId,
+          'right'
         ),
         createFormworkEdgeElement(
           `${basePrefix}-ล่าง(นอก)`,
@@ -432,7 +516,9 @@ export function createEdgesFromBoxTool(
           'outer',
           beamWidthCm,
           FORMWORK_THICKNESS_CM,
-          FORMWORK_THICKNESS_CM
+          FORMWORK_THICKNESS_CM,
+          outerGroupId,
+          'bottom'
         ),
         createFormworkEdgeElement(
           `${basePrefix}-ซ้าย(นอก)`,
@@ -443,7 +529,9 @@ export function createEdgesFromBoxTool(
           'outer',
           beamWidthCm,
           0,
-          0
+          0,
+          outerGroupId,
+          'left'
         )
       );
     }
@@ -1722,6 +1810,144 @@ export function convertDetectedBeamsToFormworkSides(
         );
       });
     }
+  }
+
+  return groupClosedInnerBayLoops(sides, safeScale);
+}
+
+/**
+ * Finds closed 4-sided inner bay loops (วงรอบในของไม้แบบ) among detected formwork sides
+ * and groups each 4-sided loop into a 4-corner adjustable rectangle (boxGroupId)
+ * that auto-arranges formwork inside and can be ungrouped into individual lines at any time.
+ */
+function groupClosedInnerBayLoops(
+  sides: BeamElement[],
+  safeScale: number
+): BeamElement[] {
+  const cornerTol = Math.max(8, 10 * safeScale);
+  const usedIds = new Set<string>();
+  let bayCounter = 1;
+
+  for (const topSeg of sides) {
+    if (usedIds.has(topSeg.id) || topSeg.boxGroupId) continue;
+    const isTopH =
+      Math.abs(topSeg.end.x - topSeg.start.x) >= Math.abs(topSeg.end.y - topSeg.start.y);
+    if (!isTopH) continue;
+    // Top of an inner bay has downward (+Y) formwork normal: for left->right (end.x > start.x), leftSide.enabled is true
+    const inMinX = Math.min(topSeg.start.x, topSeg.end.x);
+    const inMaxX = Math.max(topSeg.start.x, topSeg.end.x);
+    const inMinY = (topSeg.start.y + topSeg.end.y) / 2;
+    const topNormalY =
+      (topSeg.end.x >= topSeg.start.x ? 1 : -1) *
+      (topSeg.leftSide.enabled !== false ? 1 : -1);
+    if (topNormalY <= 0) continue;
+
+    // Find matching right vertical segment at x ≈ inMaxX starting at y ≈ inMinY with leftward (-X) formwork normal
+    const rightSeg = sides.find((s) => {
+      if (usedIds.has(s.id) || s.id === topSeg.id || s.boxGroupId) return false;
+      const isV = Math.abs(s.end.y - s.start.y) > Math.abs(s.end.x - s.start.x);
+      if (!isV) return false;
+      const sx = (s.start.x + s.end.x) / 2;
+      const sMinY = Math.min(s.start.y, s.end.y);
+      const normalX =
+        (s.end.y >= s.start.y ? -1 : 1) * (s.leftSide.enabled !== false ? 1 : -1);
+      return (
+        normalX < 0 &&
+        Math.abs(sx - inMaxX) <= cornerTol &&
+        Math.abs(sMinY - inMinY) <= cornerTol
+      );
+    });
+    if (!rightSeg) continue;
+
+    const inMaxY = Math.max(rightSeg.start.y, rightSeg.end.y);
+    if (inMaxY - inMinY < 20) continue;
+
+    // Find matching bottom horizontal segment at y ≈ inMaxY spanning [inMinX, inMaxX] with upward (-Y) formwork normal
+    const botSeg = sides.find((s) => {
+      if (usedIds.has(s.id) || s.id === topSeg.id || s.boxGroupId) return false;
+      const isH = Math.abs(s.end.x - s.start.x) >= Math.abs(s.end.y - s.start.y);
+      if (!isH) return false;
+      const sy = (s.start.y + s.end.y) / 2;
+      const sMinX = Math.min(s.start.x, s.end.x);
+      const sMaxX = Math.max(s.start.x, s.end.x);
+      const normalY =
+        (s.end.x >= s.start.x ? 1 : -1) * (s.leftSide.enabled !== false ? 1 : -1);
+      return (
+        normalY < 0 &&
+        Math.abs(sy - inMaxY) <= cornerTol &&
+        Math.abs(sMinX - inMinX) <= cornerTol &&
+        Math.abs(sMaxX - inMaxX) <= cornerTol
+      );
+    });
+    if (!botSeg) continue;
+
+    // Find matching left vertical segment at x ≈ inMinX spanning [inMinY, inMaxY] with rightward (+X) formwork normal
+    const leftSeg = sides.find((s) => {
+      if (usedIds.has(s.id) || s.id === rightSeg.id || s.boxGroupId) return false;
+      const isV = Math.abs(s.end.y - s.start.y) > Math.abs(s.end.x - s.start.x);
+      if (!isV) return false;
+      const sx = (s.start.x + s.end.x) / 2;
+      const sMinY = Math.min(s.start.y, s.end.y);
+      const sMaxY = Math.max(s.start.y, s.end.y);
+      const normalX =
+        (s.end.y >= s.start.y ? -1 : 1) * (s.leftSide.enabled !== false ? 1 : -1);
+      return (
+        normalX > 0 &&
+        Math.abs(sx - inMinX) <= cornerTol &&
+        Math.abs(sMinY - inMinY) <= cornerTol &&
+        Math.abs(sMaxY - inMaxY) <= cornerTol
+      );
+    });
+    if (!leftSeg) continue;
+
+    const groupId = `auto-inner-bay-${bayCounter++}`;
+    usedIds.add(topSeg.id);
+    usedIds.add(rightSeg.id);
+    usedIds.add(botSeg.id);
+    usedIds.add(leftSeg.id);
+
+    // Normalize all 4 segments into a clockwise inner rectangle loop with 'left' inward active side
+    topSeg.start = { x: inMinX, y: inMinY };
+    topSeg.end = { x: inMaxX, y: inMinY };
+    topSeg.edgeRole = 'inner';
+    topSeg.boxGroupId = groupId;
+    topSeg.boxSide = 'top';
+    topSeg.leftSide = { ...topSeg.leftSide, enabled: true, startExtensionCm: 0, endExtensionCm: 0 };
+    topSeg.rightSide = { ...topSeg.rightSide, enabled: false, startExtensionCm: 0, endExtensionCm: 0 };
+
+    rightSeg.start = { x: inMaxX, y: inMinY };
+    rightSeg.end = { x: inMaxX, y: inMaxY };
+    rightSeg.edgeRole = 'inner';
+    rightSeg.boxGroupId = groupId;
+    rightSeg.boxSide = 'right';
+    rightSeg.leftSide = {
+      ...rightSeg.leftSide,
+      enabled: true,
+      startExtensionCm: -FORMWORK_THICKNESS_CM,
+      endExtensionCm: -FORMWORK_THICKNESS_CM,
+    };
+    rightSeg.rightSide = { ...rightSeg.rightSide, enabled: false, startExtensionCm: 0, endExtensionCm: 0 };
+
+    botSeg.start = { x: inMaxX, y: inMaxY };
+    botSeg.end = { x: inMinX, y: inMaxY };
+    botSeg.edgeRole = 'inner';
+    botSeg.boxGroupId = groupId;
+    botSeg.boxSide = 'bottom';
+    botSeg.leftSide = { ...botSeg.leftSide, enabled: true, startExtensionCm: 0, endExtensionCm: 0 };
+    botSeg.rightSide = { ...botSeg.rightSide, enabled: false, startExtensionCm: 0, endExtensionCm: 0 };
+
+    leftSeg.start = { x: inMinX, y: inMaxY };
+    leftSeg.end = { x: inMinX, y: inMinY };
+    leftSeg.edgeRole = 'inner';
+    leftSeg.boxGroupId = groupId;
+    leftSeg.boxSide = 'left';
+    leftSeg.leftSide = {
+      ...leftSeg.leftSide,
+      enabled: true,
+      startExtensionCm: -FORMWORK_THICKNESS_CM,
+      endExtensionCm: -FORMWORK_THICKNESS_CM,
+    };
+    leftSeg.rightSide = { ...leftSeg.rightSide, enabled: false, startExtensionCm: 0, endExtensionCm: 0 };
   }
 
   return sides;

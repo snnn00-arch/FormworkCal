@@ -6,7 +6,7 @@ import {
   computeRentalSummary,
   getPlacedPanelPolygon,
 } from '../formworkOptimizer';
-import { createEdgesFromBoxTool } from '../beamDetector';
+import { createEdgesFromBoxTool, updateBoxGroupRectangle, ungroupBoxEdges } from '../beamDetector';
 import { BeamElement, FORMWORK_THICKNESS_CM } from '../../types/formwork';
 
 describe('formworkOptimizer', () => {
@@ -202,6 +202,64 @@ describe('formworkOptimizer', () => {
     expect(summary.matrix[50][70]).toBe(1);
     expect(summary.freeTotalsByHeightCm[40].totalLengthCm).toBe(5);
     expect(summary.freeTotalsByHeightCm[70].totalLengthCm).toBe(5);
+  });
+
+  it('supports 4-corner box group resizing with auto formwork panel arrangement inside, and ungrouping into individual lines', () => {
+    // 1. Create inner box around [100, 500] x [100, 400]
+    const boxEdges = createEdgesFromBoxTool(
+      'S1',
+      { x: 100, y: 100 },
+      { x: 500, y: 400 },
+      'inner',
+      60,
+      1.0,
+      20,
+      false // only inner 4 edges
+    );
+    expect(boxEdges).toHaveLength(4);
+    const boxGroupId = boxEdges[0].boxGroupId!;
+    expect(boxGroupId).toBeDefined();
+    expect(boxEdges.every((e) => e.boxGroupId === boxGroupId)).toBe(true);
+
+    // Initial panels auto-placed inside [100, 500] x [100, 400]
+    const initialPanels = computeAllBeamPanels(boxEdges, 1.0);
+    expect(initialPanels.length).toBeGreaterThan(0);
+    for (const p of initialPanels) {
+      const parent = boxEdges.find((b) => b.id === p.beamId)!;
+      const poly = getPlacedPanelPolygon(p, parent, 1.0);
+      for (const pt of poly) {
+        expect(pt.x).toBeGreaterThanOrEqual(100 - 0.1);
+        expect(pt.x).toBeLessThanOrEqual(500 + 0.1);
+        expect(pt.y).toBeGreaterThanOrEqual(100 - 0.1);
+        expect(pt.y).toBeLessThanOrEqual(400 + 0.1);
+      }
+    }
+
+    // 2. Adjust corner: drag bottom-right corner to (600, 450)
+    const resizedEdges = updateBoxGroupRectangle(
+      boxEdges,
+      boxGroupId,
+      { x: 100, y: 100 },
+      { x: 600, y: 450 }
+    );
+    const optimizedResized = applyAutoCornerExtensions(resizedEdges, 1.0);
+    const resizedPanels = computeAllBeamPanels(optimizedResized, 1.0);
+    for (const p of resizedPanels) {
+      const parent = optimizedResized.find((b) => b.id === p.beamId)!;
+      const poly = getPlacedPanelPolygon(p, parent, 1.0);
+      for (const pt of poly) {
+        expect(pt.x).toBeGreaterThanOrEqual(100 - 0.1);
+        expect(pt.x).toBeLessThanOrEqual(600 + 0.1);
+        expect(pt.y).toBeGreaterThanOrEqual(100 - 0.1);
+        expect(pt.y).toBeLessThanOrEqual(450 + 0.1);
+      }
+    }
+
+    // 3. Ungroup box: turns into 4 independent single-edge lines
+    const ungrouped = ungroupBoxEdges(optimizedResized, boxGroupId);
+    expect(ungrouped.every((e) => e.boxGroupId === undefined)).toBe(true);
+    expect(ungrouped.every((e) => e.boxSide === undefined)).toBe(true);
+    expect(ungrouped).toHaveLength(4);
   });
 });
 

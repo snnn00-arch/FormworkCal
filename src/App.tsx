@@ -22,6 +22,8 @@ import {
   createEdgesFromBoxTool,
   createEdgesFromLineTool,
   extractColumnSnapPoints,
+  updateBoxGroupRectangle,
+  ungroupBoxEdges,
 } from './engine/beamDetector';
 import {
   downloadCsvFile,
@@ -281,7 +283,44 @@ export const App: React.FC = () => {
     }
   };
 
-  // Global keyboard shortcut: Delete / Backspace deletes the selected beam/formwork strip; Escape cancels drawing or selection
+  const handleResizeBoxGroup = (
+    boxGroupId: string,
+    p1: Point,
+    p2: Point,
+    finalize = false
+  ) => {
+    setBeams((prev) => {
+      const updated = updateBoxGroupRectangle(prev, boxGroupId, p1, p2);
+      return finalize ? applyAutoCornerExtensions(updated, pixelsPerCm) : updated;
+    });
+  };
+
+  const handleMoveBoxGroup = (
+    boxGroupId: string,
+    dx: number,
+    dy: number,
+    finalize = false
+  ) => {
+    setBeams((prev) => {
+      const moved = prev.map((b) => {
+        if (b.boxGroupId !== boxGroupId) return b;
+        return {
+          ...b,
+          start: { x: b.start.x + dx, y: b.start.y + dy },
+          end: { x: b.end.x + dx, y: b.end.y + dy },
+          leftSide: { ...b.leftSide, customPanels: undefined },
+          rightSide: { ...b.rightSide, customPanels: undefined },
+        };
+      });
+      return finalize ? applyAutoCornerExtensions(moved, pixelsPerCm) : moved;
+    });
+  };
+
+  const handleUngroupBox = (boxGroupId: string) => {
+    setBeams((prev) => applyAutoCornerExtensions(ungroupBoxEdges(prev, boxGroupId), pixelsPerCm));
+  };
+
+  // Global keyboard shortcut: Delete / Backspace deletes the selected beam/formwork strip; Escape cancels drawing or selection; U ungroups selected box
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -298,6 +337,12 @@ export const App: React.FC = () => {
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBeamId) {
         e.preventDefault();
         handleDeleteBeam(selectedBeamId);
+      } else if ((e.key === 'u' || e.key === 'U') && selectedBeamId) {
+        const selected = beams.find((b) => b.id === selectedBeamId);
+        if (selected?.boxGroupId) {
+          e.preventDefault();
+          handleUngroupBox(selected.boxGroupId);
+        }
       } else if (e.key === 'Escape') {
         if (activeTool !== 'select') {
           setActiveTool('select');
@@ -309,7 +354,7 @@ export const App: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedBeamId, activeTool, pixelsPerCm]);
+  }, [selectedBeamId, activeTool, pixelsPerCm, beams]);
 
   const handleResetBeamToAuto = (beamId: string) => {
     setBeams((prev) =>
@@ -373,6 +418,9 @@ export const App: React.FC = () => {
           onSelectBeam={setSelectedBeamId}
           onMoveBeam={handleMoveBeam}
           onDeleteBeam={handleDeleteBeam}
+          onResizeBoxGroup={handleResizeBoxGroup}
+          onMoveBoxGroup={handleMoveBoxGroup}
+          onUngroupBox={handleUngroupBox}
           activeTool={activeTool}
           onAddBeam={handleAddBeam}
           scaleMode={scaleMode}
@@ -387,6 +435,7 @@ export const App: React.FC = () => {
           onUpdateBeam={handleUpdateBeam}
           onDeleteBeam={handleDeleteBeam}
           onResetBeamToAuto={handleResetBeamToAuto}
+          onUngroupBox={handleUngroupBox}
         />
       </div>
     </div>

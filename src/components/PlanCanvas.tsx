@@ -7,7 +7,7 @@ import {
 } from '../types/formwork';
 import { SnapPoint } from '../engine/beamDetector';
 import { getBeamLengthCm, getPlacedPanelPolygon } from '../engine/formworkOptimizer';
-import { ZoomIn, ZoomOut, RotateCcw, Upload, Trash2, Move } from 'lucide-react';
+import { ZoomIn, ZoomOut, RotateCcw, Upload, Trash2, Move, Scissors } from 'lucide-react';
 
 interface PlanCanvasProps {
   canvasRef: React.RefObject<HTMLCanvasElement>;
@@ -20,6 +20,9 @@ interface PlanCanvasProps {
   onSelectBeam: (beamId: string | null) => void;
   onMoveBeam?: (beamId: string, newStart: Point, newEnd: Point, finalize?: boolean) => void;
   onDeleteBeam?: (beamId: string) => void;
+  onResizeBoxGroup?: (boxGroupId: string, anchorPt: Point, newCornerPt: Point, finalize?: boolean) => void;
+  onMoveBoxGroup?: (boxGroupId: string, dx: number, dy: number, finalize?: boolean) => void;
+  onUngroupBox?: (boxGroupId: string) => void;
   activeTool: DrawingToolMode | 'draw_beam';
   onAddBeam: (start: Point, end: Point, toolMode?: DrawingToolMode | 'draw_beam') => void;
   scaleMode: 'none' | 'manual_p1' | 'manual_p2';
@@ -28,10 +31,14 @@ interface PlanCanvasProps {
 
 interface DragBeamState {
   beamId: string;
-  mode: 'move_beam' | 'move_start' | 'move_end';
+  boxGroupId?: string;
+  mode: 'move_beam' | 'move_start' | 'move_end' | 'resize_box_corner' | 'move_box';
+  cornerKey?: 'nw' | 'ne' | 'se' | 'sw';
+  anchorPt?: Point;
   startMouse: Point;
   origStart: Point;
   origEnd: Point;
+  origEdges?: Array<{ id: string; start: Point; end: Point }>;
   hasMoved: boolean;
 }
 
@@ -97,6 +104,9 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   onSelectBeam,
   onMoveBeam,
   onDeleteBeam,
+  onResizeBoxGroup,
+  onMoveBoxGroup,
+  onUngroupBox,
   activeTool,
   onAddBeam,
   scaleMode,
@@ -314,18 +324,65 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       }
     }
 
-    // 4b. Draw Interactive Endpoint Drag Handles for Selected Beam/Edge
+    // 4b. Draw Interactive Drag Handles: 4 Corner Handles for Box Group, or 2 Endpoints for Single Line
     const selectedBeam = beams.find((b) => b.id === selectedBeamId);
     if (selectedBeam) {
-      const handleRadius = 5.5 / zoom;
-      for (const pt of [selectedBeam.start, selectedBeam.end]) {
-        ctx.fillStyle = '#FFFFFF';
-        ctx.strokeStyle = '#2563EB';
-        ctx.lineWidth = 2.2 / zoom;
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, handleRadius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
+      if (selectedBeam.boxGroupId) {
+        const boxEdges = beams.filter((b) => b.boxGroupId === selectedBeam.boxGroupId);
+        if (boxEdges.length > 0) {
+          const bMinX = Math.min(...boxEdges.flatMap((b) => [b.start.x, b.end.x]));
+          const bMaxX = Math.max(...boxEdges.flatMap((b) => [b.start.x, b.end.x]));
+          const bMinY = Math.min(...boxEdges.flatMap((b) => [b.start.y, b.end.y]));
+          const bMaxY = Math.max(...boxEdges.flatMap((b) => [b.start.y, b.end.y]));
+
+          // Dashed box group boundary
+          ctx.strokeStyle = '#4F46E5';
+          ctx.lineWidth = 2 / zoom;
+          ctx.setLineDash([6 / zoom, 3 / zoom]);
+          ctx.strokeRect(bMinX, bMinY, bMaxX - bMinX, bMaxY - bMinY);
+          ctx.setLineDash([]);
+
+          // 4 Square Corner Handles (จับขอบ 4 มุม)
+          const hSize = 10 / zoom;
+          const corners = [
+            { x: bMinX, y: bMinY },
+            { x: bMaxX, y: bMinY },
+            { x: bMaxX, y: bMaxY },
+            { x: bMinX, y: bMaxY },
+          ];
+
+          for (const c of corners) {
+            ctx.fillStyle = '#FFFFFF';
+            ctx.strokeStyle = '#4F46E5';
+            ctx.lineWidth = 2.4 / zoom;
+            ctx.fillRect(c.x - hSize / 2, c.y - hSize / 2, hSize, hSize);
+            ctx.strokeRect(c.x - hSize / 2, c.y - hSize / 2, hSize, hSize);
+          }
+
+          // Badge above rectangle
+          const wCm = Math.round((bMaxX - bMinX) / pixelsPerCm);
+          const hCm = Math.round((bMaxY - bMinY) / pixelsPerCm);
+          ctx.fillStyle = '#312E81';
+          ctx.font = `700 ${Math.max(10, 11 / zoom)}px "Plus Jakarta Sans", sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'bottom';
+          ctx.fillText(
+            `สี่เหลี่ยมวงใน: ${wCm} × ${hCm} ซม. (จับขอบ 4 มุม)`,
+            (bMinX + bMaxX) / 2,
+            bMinY - 7 / zoom
+          );
+        }
+      } else {
+        const handleRadius = 5.5 / zoom;
+        for (const pt of [selectedBeam.start, selectedBeam.end]) {
+          ctx.fillStyle = '#FFFFFF';
+          ctx.strokeStyle = '#2563EB';
+          ctx.lineWidth = 2.2 / zoom;
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, handleRadius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
       }
     }
 
@@ -488,9 +545,82 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
 
     // Select & Drag Mode ('select')
     if (activeTool === 'select') {
-      // 1. Check endpoint handles of currently selected beam first
+      // 1. Check 4 corner handles of currently selected box group first
       const currentSelected = beams.find((b) => b.id === selectedBeamId);
-      if (currentSelected) {
+      if (currentSelected?.boxGroupId) {
+        const boxEdges = beams.filter((b) => b.boxGroupId === currentSelected.boxGroupId);
+        if (boxEdges.length > 0) {
+          const bMinX = Math.min(...boxEdges.flatMap((b) => [b.start.x, b.end.x]));
+          const bMaxX = Math.max(...boxEdges.flatMap((b) => [b.start.x, b.end.x]));
+          const bMinY = Math.min(...boxEdges.flatMap((b) => [b.start.y, b.end.y]));
+          const bMaxY = Math.max(...boxEdges.flatMap((b) => [b.start.y, b.end.y]));
+          const cornerTol = 14 / zoom;
+
+          // NW corner -> anchor SE
+          if (Math.hypot(world.x - bMinX, world.y - bMinY) <= cornerTol) {
+            setDragState({
+              beamId: currentSelected.id,
+              boxGroupId: currentSelected.boxGroupId,
+              mode: 'resize_box_corner',
+              cornerKey: 'nw',
+              anchorPt: { x: bMaxX, y: bMaxY },
+              startMouse: world,
+              origStart: { x: bMinX, y: bMinY },
+              origEnd: { x: bMaxX, y: bMaxY },
+              hasMoved: false,
+            });
+            return;
+          }
+          // NE corner -> anchor SW
+          if (Math.hypot(world.x - bMaxX, world.y - bMinY) <= cornerTol) {
+            setDragState({
+              beamId: currentSelected.id,
+              boxGroupId: currentSelected.boxGroupId,
+              mode: 'resize_box_corner',
+              cornerKey: 'ne',
+              anchorPt: { x: bMinX, y: bMaxY },
+              startMouse: world,
+              origStart: { x: bMinX, y: bMinY },
+              origEnd: { x: bMaxX, y: bMaxY },
+              hasMoved: false,
+            });
+            return;
+          }
+          // SE corner -> anchor NW
+          if (Math.hypot(world.x - bMaxX, world.y - bMaxY) <= cornerTol) {
+            setDragState({
+              beamId: currentSelected.id,
+              boxGroupId: currentSelected.boxGroupId,
+              mode: 'resize_box_corner',
+              cornerKey: 'se',
+              anchorPt: { x: bMinX, y: bMinY },
+              startMouse: world,
+              origStart: { x: bMinX, y: bMinY },
+              origEnd: { x: bMaxX, y: bMaxY },
+              hasMoved: false,
+            });
+            return;
+          }
+          // SW corner -> anchor NE
+          if (Math.hypot(world.x - bMinX, world.y - bMaxY) <= cornerTol) {
+            setDragState({
+              beamId: currentSelected.id,
+              boxGroupId: currentSelected.boxGroupId,
+              mode: 'resize_box_corner',
+              cornerKey: 'sw',
+              anchorPt: { x: bMaxX, y: bMinY },
+              startMouse: world,
+              origStart: { x: bMinX, y: bMinY },
+              origEnd: { x: bMaxX, y: bMaxY },
+              hasMoved: false,
+            });
+            return;
+          }
+        }
+      }
+
+      // 1b. Check endpoint handles of currently selected single beam
+      if (currentSelected && !currentSelected.boxGroupId) {
         const handleTol = 11 / zoom;
         if (Math.hypot(world.x - currentSelected.start.x, world.y - currentSelected.start.y) <= handleTol) {
           setDragState({
@@ -528,7 +658,8 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
           onSelectBeam(parentBeam.id);
           setDragState({
             beamId: parentBeam.id,
-            mode: 'move_beam',
+            boxGroupId: parentBeam.boxGroupId,
+            mode: parentBeam.boxGroupId ? 'move_box' : 'move_beam',
             startMouse: world,
             origStart: { ...parentBeam.start },
             origEnd: { ...parentBeam.end },
@@ -556,7 +687,8 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         onSelectBeam(foundBeam.id);
         setDragState({
           beamId: foundBeam.id,
-          mode: 'move_beam',
+          boxGroupId: foundBeam.boxGroupId,
+          mode: foundBeam.boxGroupId ? 'move_box' : 'move_beam',
           startMouse: world,
           origStart: { ...foundBeam.start },
           origEnd: { ...foundBeam.end },
@@ -581,7 +713,8 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     const shouldSnap =
       activeTool !== 'select' ||
       dragState?.mode === 'move_start' ||
-      dragState?.mode === 'move_end';
+      dragState?.mode === 'move_end' ||
+      dragState?.mode === 'resize_box_corner';
     const nearestSnap =
       shouldSnap && snapPoints.length > 0
         ? findNearestSnapPoint(rawWorld, snapPoints, snapTolPx)
@@ -591,22 +724,27 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     const world: Point = nearestSnap ? { x: nearestSnap.x, y: nearestSnap.y } : rawWorld;
     setCurrentMousePos(world);
 
-    // Dragging a selected beam/formwork strip or its endpoint
-    if (dragState && onMoveBeam) {
+    // Dragging a 4-corner box group or individual formwork strip
+    if (dragState) {
       const dx = rawWorld.x - dragState.startMouse.x;
       const dy = rawWorld.y - dragState.startMouse.y;
       if (!dragState.hasMoved && Math.hypot(dx, dy) < 2 / zoom) {
         return;
       }
 
-      if (dragState.mode === 'move_beam') {
+      if (dragState.mode === 'resize_box_corner' && onResizeBoxGroup && dragState.anchorPt && dragState.boxGroupId) {
+        const cornerPt = nearestSnap ? { x: nearestSnap.x, y: nearestSnap.y } : rawWorld;
+        onResizeBoxGroup(dragState.boxGroupId, dragState.anchorPt, cornerPt, false);
+      } else if (dragState.mode === 'move_box' && onMoveBoxGroup && dragState.boxGroupId) {
+        onMoveBoxGroup(dragState.boxGroupId, dx, dy, false);
+      } else if (dragState.mode === 'move_beam' && onMoveBeam) {
         onMoveBeam(
           dragState.beamId,
           { x: dragState.origStart.x + dx, y: dragState.origStart.y + dy },
           { x: dragState.origEnd.x + dx, y: dragState.origEnd.y + dy },
           false
         );
-      } else if (dragState.mode === 'move_start') {
+      } else if (dragState.mode === 'move_start' && onMoveBeam) {
         let nextStart = nearestSnap
           ? { x: nearestSnap.x, y: nearestSnap.y }
           : { x: dragState.origStart.x + dx, y: dragState.origStart.y + dy };
@@ -618,7 +756,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
           }
         }
         onMoveBeam(dragState.beamId, nextStart, dragState.origEnd, false);
-      } else if (dragState.mode === 'move_end') {
+      } else if (dragState.mode === 'move_end' && onMoveBeam) {
         let nextEnd = nearestSnap
           ? { x: nearestSnap.x, y: nearestSnap.y }
           : { x: dragState.origEnd.x + dx, y: dragState.origEnd.y + dy };
@@ -648,10 +786,19 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
 
   const handleMouseUp = () => {
     if (dragState) {
-      if (dragState.hasMoved && onMoveBeam) {
-        const targetBeam = beams.find((b) => b.id === dragState.beamId);
-        if (targetBeam) {
-          onMoveBeam(targetBeam.id, targetBeam.start, targetBeam.end, true);
+      if (dragState.hasMoved) {
+        if (dragState.mode === 'resize_box_corner' && onResizeBoxGroup && dragState.anchorPt && dragState.boxGroupId) {
+          const cornerPt = activeSnap ? { x: activeSnap.x, y: activeSnap.y } : currentMousePos || { x: 0, y: 0 };
+          onResizeBoxGroup(dragState.boxGroupId, dragState.anchorPt, cornerPt, true);
+        } else if (dragState.mode === 'move_box' && onMoveBoxGroup && dragState.boxGroupId) {
+          const dx = currentMousePos ? currentMousePos.x - dragState.startMouse.x : 0;
+          const dy = currentMousePos ? currentMousePos.y - dragState.startMouse.y : 0;
+          onMoveBoxGroup(dragState.boxGroupId, dx, dy, true);
+        } else if (onMoveBeam) {
+          const targetBeam = beams.find((b) => b.id === dragState.beamId);
+          if (targetBeam) {
+            onMoveBeam(targetBeam.id, targetBeam.start, targetBeam.end, true);
+          }
         }
       }
       setDragState(null);
@@ -737,6 +884,16 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
               • คลิกค้างเพื่อลากขยับ หรือดึงจุดปลาย
             </span>
           </div>
+          {selectedBeamObj.boxGroupId && onUngroupBox && (
+            <button
+              onClick={() => onUngroupBox(selectedBeamObj.boxGroupId!)}
+              title="แยกกลุ่มไม้แบบเป็นเส้นเดี่ยว (Ungroup) เพื่อให้ตั้งไม้แบบเป็นเส้นๆ เหมือนเดิมได้"
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-300 hover:bg-amber-100 transition-colors cursor-pointer"
+            >
+              <Scissors className="w-3.5 h-3.5" />
+              <span>แยกกลุ่ม (Ungroup)</span>
+            </button>
+          )}
           {onDeleteBeam && (
             <button
               onClick={() => onDeleteBeam(selectedBeamObj.id)}

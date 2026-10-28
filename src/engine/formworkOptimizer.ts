@@ -246,6 +246,30 @@ export function applyAutoCornerExtensions(
       const rightActive = beam.rightSide.enabled !== false;
       const activeSign = leftActive ? 1 : -1;
 
+      if (beam.boxGroupId && beam.boxSide) {
+        const ext = leftActive
+          ? isHorizontal
+            ? 0
+            : -FORMWORK_THICKNESS_CM
+          : isHorizontal
+          ? FORMWORK_THICKNESS_CM
+          : 0;
+        return {
+          ...beam,
+          thicknessCm: FORMWORK_THICKNESS_CM,
+          leftSide: {
+            ...beam.leftSide,
+            startExtensionCm: leftActive ? ext : 0,
+            endExtensionCm: leftActive ? ext : 0,
+          },
+          rightSide: {
+            ...beam.rightSide,
+            startExtensionCm: rightActive ? ext : 0,
+            endExtensionCm: rightActive ? ext : 0,
+          },
+        };
+      }
+
       const cornerTol = Math.max(8, 12 * safeScale);
       const computeSingleEdgeCornerExt = (pt: Point, currentExt: number): number => {
         let bestPartner: BeamElement | null = null;
