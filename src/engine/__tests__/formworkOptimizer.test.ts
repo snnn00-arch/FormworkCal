@@ -4,7 +4,9 @@ import {
   applyAutoCornerExtensions,
   computeAllBeamPanels,
   computeRentalSummary,
+  getPlacedPanelPolygon,
 } from '../formworkOptimizer';
+import { createEdgesFromBoxTool } from '../beamDetector';
 import { BeamElement, FORMWORK_THICKNESS_CM } from '../../types/formwork';
 
 describe('formworkOptimizer', () => {
@@ -52,7 +54,7 @@ describe('formworkOptimizer', () => {
     expect(free[0].thicknessCm).toBe(5);
   });
 
-  it('adds +5 cm outer corner extension when two perpendicular beams meet at an L-corner', () => {
+  it('allocates non-overlapping outer and inner corner extensions when two perpendicular beams meet at an L-corner or Cross-junction', () => {
     const beams: BeamElement[] = [
       {
         id: 'b1',
@@ -79,10 +81,44 @@ describe('formworkOptimizer', () => {
     ];
 
     const adjusted = applyAutoCornerExtensions(beams, 1);
-    const hasFiveCmExtension =
-      adjusted[0].leftSide.endExtensionCm === 5 ||
-      adjusted[0].rightSide.endExtensionCm === 5;
-    expect(hasFiveCmExtension).toBe(true);
+    // Horizontal beam wraps outer corner (+15cm = halfW 10cm + 5cm formwork) and sets back inner corner (-10cm)
+    expect(adjusted[0].rightSide.endExtensionCm).toBe(15);
+    expect(adjusted[0].leftSide.endExtensionCm).toBe(-10);
+    // Vertical beam: leftSide (-x, inner corner) sets back (-15cm), rightSide (+x, outer corner) butts flush (+10cm)
+    expect(adjusted[1].leftSide.startExtensionCm).toBe(-15);
+    expect(adjusted[1].rightSide.startExtensionCm).toBe(10);
+
+    // Verify 0 2D overlap across all generated panels for both L-corner and Box tool
+    const checkNoOverlaps = (testBeams: BeamElement[]) => {
+      const panels = computeAllBeamPanels(testBeams, 1);
+      const boxes = panels.map((p) => {
+        const parent = testBeams.find((b) => b.id === p.beamId)!;
+        const poly = getPlacedPanelPolygon(p, parent, 1);
+        return {
+          id: p.id,
+          minX: Math.min(...poly.map((pt) => pt.x)),
+          maxX: Math.max(...poly.map((pt) => pt.x)),
+          minY: Math.min(...poly.map((pt) => pt.y)),
+          maxY: Math.max(...poly.map((pt) => pt.y)),
+        };
+      });
+
+      for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+          const ovX = Math.min(boxes[i].maxX, boxes[j].maxX) - Math.max(boxes[i].minX, boxes[j].minX);
+          const ovY = Math.min(boxes[i].maxY, boxes[j].maxY) - Math.max(boxes[i].minY, boxes[j].minY);
+          expect(ovX > 0.5 && ovY > 0.5).toBe(false);
+        }
+      }
+    };
+
+    checkNoOverlaps(adjusted);
+
+    const boxEdges = applyAutoCornerExtensions(
+      createEdgesFromBoxTool('S1', { x: 100, y: 100 }, { x: 500, y: 400 }, 'inner', 60, 1, 20, true),
+      1
+    );
+    checkNoOverlaps(boxEdges);
   });
 
   it('aggregates rental summary across all 12 SKUs (3 lengths x 4 heights) and free-length heights', () => {
@@ -110,3 +146,4 @@ describe('formworkOptimizer', () => {
     expect(summary.freeTotalsByHeightCm[70].totalLengthCm).toBe(5);
   });
 });
+

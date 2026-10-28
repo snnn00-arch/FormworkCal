@@ -2,11 +2,11 @@ import React, { useRef, useState, useEffect } from 'react';
 import {
   BeamElement,
   DrawingToolMode,
-  FORMWORK_THICKNESS_CM,
   PlacedPanel,
   Point,
 } from '../types/formwork';
-import { ZoomIn, ZoomOut, RotateCcw, Upload } from 'lucide-react';
+import { getBeamLengthCm, getPlacedPanelPolygon } from '../engine/formworkOptimizer';
+import { ZoomIn, ZoomOut, RotateCcw, Upload, Trash2, Move } from 'lucide-react';
 
 interface PlanCanvasProps {
   canvasRef: React.RefObject<HTMLCanvasElement>;
@@ -16,10 +16,55 @@ interface PlanCanvasProps {
   pixelsPerCm: number;
   selectedBeamId: string | null;
   onSelectBeam: (beamId: string | null) => void;
+  onMoveBeam?: (beamId: string, newStart: Point, newEnd: Point, finalize?: boolean) => void;
+  onDeleteBeam?: (beamId: string) => void;
   activeTool: DrawingToolMode | 'draw_beam';
   onAddBeam: (start: Point, end: Point, toolMode?: DrawingToolMode | 'draw_beam') => void;
   scaleMode: 'none' | 'manual_p1' | 'manual_p2';
   onCalibrationPointsSelected: (p1: Point, p2: Point) => void;
+}
+
+interface DragBeamState {
+  beamId: string;
+  mode: 'move_beam' | 'move_start' | 'move_end';
+  startMouse: Point;
+  origStart: Point;
+  origEnd: Point;
+  hasMoved: boolean;
+}
+
+function pointToSegmentDist(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+function isPointInOrNearPolygon(
+  pt: Point,
+  poly: [Point, Point, Point, Point],
+  tolPx: number
+): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x;
+    const yi = poly[i].y;
+    const xj = poly[j].x;
+    const yj = poly[j].y;
+    const intersect =
+      yi > pt.y !== yj > pt.y && pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi + 1e-9) + xi;
+    if (intersect) inside = !inside;
+  }
+  if (inside) return true;
+
+  for (let i = 0; i < 4; i++) {
+    if (pointToSegmentDist(pt, poly[i], poly[(i + 1) % 4]) <= tolPx) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export const PlanCanvas: React.FC<PlanCanvasProps> = ({
@@ -30,6 +75,8 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   pixelsPerCm,
   selectedBeamId,
   onSelectBeam,
+  onMoveBeam,
+  onDeleteBeam,
   activeTool,
   onAddBeam,
   scaleMode,
@@ -40,6 +87,10 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   const [pan, setPan] = useState<Point>({ x: 50, y: 50 });
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState<Point>({ x: 0, y: 0 });
+
+  // Interactive dragging state for moving a selected beam or formwork strip
+  const [dragState, setDragState] = useState<DragBeamState | null>(null);
+  const [selectedPanelId, setSelectedPanelId] = useState<string | null>(null);
 
   // Drawing line / box state
   const [drawStart, setDrawStart] = useState<Point | null>(null);
@@ -145,22 +196,20 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       const ny = ux;
 
       if (beam.attachMode === 'single_edge') {
-        // Draw crisp reference edge line directly where formwork attaches
         ctx.strokeStyle = isSelected
           ? '#2563EB'
           : beam.edgeRole === 'outer'
           ? '#0284C7'
           : '#4F46E5';
-        ctx.lineWidth = (isSelected ? 2.5 : 1.5) / zoom;
+        ctx.lineWidth = (isSelected ? 2.8 : 1.5) / zoom;
         ctx.beginPath();
         ctx.moveTo(beam.start.x, beam.start.y);
         ctx.lineTo(beam.end.x, beam.end.y);
         ctx.stroke();
       } else {
-        // For dual_beam mode: draw only the two crisp edge lines (no filled beam rectangle!)
         const halfW = (beam.widthCm * pixelsPerCm) / 2;
         ctx.strokeStyle = isSelected ? '#2563EB' : '#475569';
-        ctx.lineWidth = (isSelected ? 2.2 : 1.3) / zoom;
+        ctx.lineWidth = (isSelected ? 2.5 : 1.3) / zoom;
 
         if (beam.leftSide.enabled !== false) {
           ctx.beginPath();
@@ -189,54 +238,25 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     }
 
     // 4. Draw Formwork Panels Attached Directly to Edge Lines (Fixed 5cm Thickness)
-    const thicknessPx = FORMWORK_THICKNESS_CM * pixelsPerCm;
-
     for (const panel of panels) {
       const parentBeam = beams.find((b) => b.id === panel.beamId);
       if (!parentBeam) continue;
 
-      const bDx = parentBeam.end.x - parentBeam.start.x;
-      const bDy = parentBeam.end.y - parentBeam.start.y;
-      const bLen = Math.hypot(bDx, bDy) || 1;
-      const ux = bDx / bLen;
-      const uy = bDy / bLen;
-      const nx = -uy;
-      const ny = ux;
-
-      // In single_edge mode, the formwork attaches directly on the line itself (halfW = 0)!
-      const isSingleEdge = parentBeam.attachMode === 'single_edge';
-      const halfW = isSingleEdge ? 0 : (parentBeam.widthCm * pixelsPerCm) / 2;
-      const sign = panel.side === 'left' ? 1 : -1;
-
-      const sideCfg = panel.side === 'left' ? parentBeam.leftSide : parentBeam.rightSide;
-      const startExtPx = (sideCfg.startExtensionCm || 0) * pixelsPerCm;
-
-      // Start point on the edge line (shifted back by startExtensionCm if outer corner wraps)
-      const sideStartX = parentBeam.start.x + sign * nx * halfW - ux * startExtPx;
-      const sideStartY = parentBeam.start.y + sign * ny * halfW - uy * startExtPx;
-
-      // Panel length in pixels
+      const [p1, p2, p3, p4] = getPlacedPanelPolygon(panel, parentBeam, pixelsPerCm);
       const panelLenPx = panel.lengthCm * pixelsPerCm;
-      const offsetPx = panel.offsetStartCm * pixelsPerCm;
+      const isParentSelected = parentBeam.id === selectedBeamId;
+      const isPanelClicked = panel.id === selectedPanelId;
 
-      // 4 corners of panel attached to the line and protruding 5cm outward
-      const p1x = sideStartX + ux * offsetPx;
-      const p1y = sideStartY + uy * offsetPx;
-
-      const p2x = p1x + ux * panelLenPx;
-      const p2y = p1y + uy * panelLenPx;
-
-      const p3x = p2x + sign * nx * thicknessPx;
-      const p3y = p2y + sign * ny * thicknessPx;
-
-      const p4x = p1x + sign * nx * thicknessPx;
-      const p4y = p1y + sign * ny * thicknessPx;
-
-      // Panel Theme
       const theme = panel.skuTheme;
       ctx.fillStyle = theme ? theme.fill : '#CBD5E1';
-      ctx.strokeStyle = theme ? theme.stroke : '#475569';
-      ctx.lineWidth = 1.2 / zoom;
+      ctx.strokeStyle = isPanelClicked
+        ? '#1D4ED8'
+        : isParentSelected
+        ? '#2563EB'
+        : theme
+        ? theme.stroke
+        : '#475569';
+      ctx.lineWidth = (isPanelClicked ? 2.4 : isParentSelected ? 1.8 : 1.2) / zoom;
 
       if (panel.type === 'free') {
         ctx.setLineDash([3 / zoom, 2 / zoom]);
@@ -245,12 +265,12 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       }
 
       ctx.beginPath();
-      ctx.moveTo(p1x, p1y);
-      ctx.lineTo(p2x, p2y);
-      ctx.lineTo(p3x, p3y);
-      ctx.lineTo(p4x, p4y);
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.lineTo(p3.x, p3.y);
+      ctx.lineTo(p4.x, p4.y);
       ctx.closePath();
-      ctx.globalAlpha = 0.88;
+      ctx.globalAlpha = isParentSelected ? 0.96 : 0.88;
       ctx.fill();
       ctx.globalAlpha = 1.0;
       ctx.stroke();
@@ -258,8 +278,8 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
 
       // Label on Panel
       if (panelLenPx * zoom > 22) {
-        const pMidX = (p1x + p2x + p3x + p4x) / 4;
-        const pMidY = (p1y + p2y + p3y + p4y) / 4;
+        const pMidX = (p1.x + p2.x + p3.x + p4.x) / 4;
+        const pMidY = (p1.y + p2.y + p3.y + p4.y) / 4;
         ctx.fillStyle = theme ? theme.stroke : '#1E293B';
         ctx.font = `700 ${Math.max(8, 9 / zoom)}px "Plus Jakarta Sans", sans-serif`;
         ctx.textAlign = 'center';
@@ -270,6 +290,21 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
             ? `F${panel.lengthCm}×${panel.heightCm}`
             : `${panel.lengthCm}×${panel.heightCm}`;
         ctx.fillText(labelText, pMidX, pMidY);
+      }
+    }
+
+    // 4b. Draw Interactive Endpoint Drag Handles for Selected Beam/Edge
+    const selectedBeam = beams.find((b) => b.id === selectedBeamId);
+    if (selectedBeam) {
+      const handleRadius = 5.5 / zoom;
+      for (const pt of [selectedBeam.start, selectedBeam.end]) {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.strokeStyle = '#2563EB';
+        ctx.lineWidth = 2.2 / zoom;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, handleRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
       }
     }
 
@@ -334,6 +369,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     pan,
     zoom,
     selectedBeamId,
+    selectedPanelId,
     activeTool,
     drawStart,
     currentMousePos,
@@ -342,7 +378,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     pixelsPerCm,
   ]);
 
-  // Mouse Handlers for Pan, Draw, Select, and Scale Calibration
+  // Mouse Handlers for Pan, Draw, Select, Drag-Move, and Scale Calibration
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const world = screenToWorld(e.clientX, e.clientY);
 
@@ -370,32 +406,88 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       return;
     }
 
-    // Select Line/Beam Tool
+    // Select & Drag Mode ('select')
     if (activeTool === 'select') {
-      let foundBeamId: string | null = null;
-      let bestDist = Infinity;
-
-      for (const b of beams) {
-        const dx = b.end.x - b.start.x;
-        const dy = b.end.y - b.start.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const u = ((world.x - b.start.x) * dx + (world.y - b.start.y) * dy) / (len * len);
-        if (u >= -0.05 && u <= 1.05) {
-          const projX = b.start.x + u * dx;
-          const projY = b.start.y + u * dy;
-          const dist = Math.hypot(world.x - projX, world.y - projY);
-          const threshold = Math.max(14 / zoom, ((b.widthCm + 16) * pixelsPerCm) / 2);
-          if (dist <= threshold && dist < bestDist) {
-            bestDist = dist;
-            foundBeamId = b.id;
-          }
+      // 1. Check endpoint handles of currently selected beam first
+      const currentSelected = beams.find((b) => b.id === selectedBeamId);
+      if (currentSelected) {
+        const handleTol = 11 / zoom;
+        if (Math.hypot(world.x - currentSelected.start.x, world.y - currentSelected.start.y) <= handleTol) {
+          setDragState({
+            beamId: currentSelected.id,
+            mode: 'move_start',
+            startMouse: world,
+            origStart: { ...currentSelected.start },
+            origEnd: { ...currentSelected.end },
+            hasMoved: false,
+          });
+          return;
+        }
+        if (Math.hypot(world.x - currentSelected.end.x, world.y - currentSelected.end.y) <= handleTol) {
+          setDragState({
+            beamId: currentSelected.id,
+            mode: 'move_end',
+            startMouse: world,
+            origStart: { ...currentSelected.start },
+            origEnd: { ...currentSelected.end },
+            hasMoved: false,
+          });
+          return;
         }
       }
 
-      if (foundBeamId) {
-        onSelectBeam(foundBeamId);
+      // 2. Check if user clicked directly on a Formwork Panel polygon ("กดไม้แบบบนจอ")
+      const panelHitTol = Math.max(4 / zoom, 2);
+      for (let i = panels.length - 1; i >= 0; i--) {
+        const p = panels[i];
+        const parentBeam = beams.find((b) => b.id === p.beamId);
+        if (!parentBeam) continue;
+        const poly = getPlacedPanelPolygon(p, parentBeam, pixelsPerCm);
+        if (isPointInOrNearPolygon(world, poly, panelHitTol)) {
+          setSelectedPanelId(p.id);
+          onSelectBeam(parentBeam.id);
+          setDragState({
+            beamId: parentBeam.id,
+            mode: 'move_beam',
+            startMouse: world,
+            origStart: { ...parentBeam.start },
+            origEnd: { ...parentBeam.end },
+            hasMoved: false,
+          });
+          return;
+        }
+      }
+
+      // 3. Check if user clicked on a Beam / Edge Line ("หรือกดเลือกคาน")
+      let foundBeam: BeamElement | null = null;
+      let bestDist = Infinity;
+
+      for (const b of beams) {
+        const dist = pointToSegmentDist(world, b.start, b.end);
+        const threshold = Math.max(14 / zoom, ((b.widthCm + 16) * pixelsPerCm) / 2);
+        if (dist <= threshold && dist < bestDist) {
+          bestDist = dist;
+          foundBeam = b;
+        }
+      }
+
+      if (foundBeam) {
+        setSelectedPanelId(null);
+        onSelectBeam(foundBeam.id);
+        setDragState({
+          beamId: foundBeam.id,
+          mode: 'move_beam',
+          startMouse: world,
+          origStart: { ...foundBeam.start },
+          origEnd: { ...foundBeam.end },
+          hasMoved: false,
+        });
         return;
       }
+
+      // Clicked empty space -> clear selection
+      setSelectedPanelId(null);
+      onSelectBeam(null);
     }
 
     // Default: Start Panning
@@ -407,6 +499,45 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     const world = screenToWorld(e.clientX, e.clientY);
     setCurrentMousePos(world);
 
+    // Dragging a selected beam/formwork strip or its endpoint
+    if (dragState && onMoveBeam) {
+      const dx = world.x - dragState.startMouse.x;
+      const dy = world.y - dragState.startMouse.y;
+      if (!dragState.hasMoved && Math.hypot(dx, dy) < 2 / zoom) {
+        return;
+      }
+
+      if (dragState.mode === 'move_beam') {
+        onMoveBeam(
+          dragState.beamId,
+          { x: dragState.origStart.x + dx, y: dragState.origStart.y + dy },
+          { x: dragState.origEnd.x + dx, y: dragState.origEnd.y + dy },
+          false
+        );
+      } else if (dragState.mode === 'move_start') {
+        let nextStart = { x: dragState.origStart.x + dx, y: dragState.origStart.y + dy };
+        if (Math.abs(nextStart.y - dragState.origEnd.y) <= 8 / zoom) {
+          nextStart = { x: nextStart.x, y: dragState.origEnd.y };
+        } else if (Math.abs(nextStart.x - dragState.origEnd.x) <= 8 / zoom) {
+          nextStart = { x: dragState.origEnd.x, y: nextStart.y };
+        }
+        onMoveBeam(dragState.beamId, nextStart, dragState.origEnd, false);
+      } else if (dragState.mode === 'move_end') {
+        let nextEnd = { x: dragState.origEnd.x + dx, y: dragState.origEnd.y + dy };
+        if (Math.abs(nextEnd.y - dragState.origStart.y) <= 8 / zoom) {
+          nextEnd = { x: nextEnd.x, y: dragState.origStart.y };
+        } else if (Math.abs(nextEnd.x - dragState.origStart.x) <= 8 / zoom) {
+          nextEnd = { x: dragState.origStart.x, y: nextEnd.y };
+        }
+        onMoveBeam(dragState.beamId, dragState.origStart, nextEnd, false);
+      }
+
+      if (!dragState.hasMoved) {
+        setDragState((prev) => (prev ? { ...prev, hasMoved: true } : null));
+      }
+      return;
+    }
+
     if (isPanning) {
       setPan({
         x: e.clientX - panStart.x,
@@ -416,6 +547,15 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   };
 
   const handleMouseUp = () => {
+    if (dragState) {
+      if (dragState.hasMoved && onMoveBeam) {
+        const targetBeam = beams.find((b) => b.id === dragState.beamId);
+        if (targetBeam) {
+          onMoveBeam(targetBeam.id, targetBeam.start, targetBeam.end, true);
+        }
+      }
+      setDragState(null);
+    }
     setIsPanning(false);
   };
 
@@ -424,7 +564,6 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
     const newZoom = Math.min(Math.max(zoom * zoomFactor, 0.2), 5);
 
-    // Zoom towards mouse pointer
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -443,7 +582,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       case 'draw_inner_line':
       case 'draw_beam':
         return drawStart
-          ? 'คลิกจุดสิ้นสุดของเส้นขอบใน (ระบบจะเอาไม้แบบไปเกาะตามเส้นขอบใน)'
+          ? 'คลิกจุดสิ้นสุดของเส้นขอบใน (ระบบจะเอาไม้แบบไปเกาะตามเส้นขอบในโดยไม่ชนกัน)'
           : 'วิธีที่ 1 (ลากเส้นวงใน): คลิกจุดเริ่มต้นบนเส้นขอบด้านในของคาน';
       case 'draw_inner_box':
         return drawStart
@@ -451,7 +590,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
           : 'วิธีที่ 1 (ตีกรอบวงใน): คลิกมุมที่ 1 ของขอบด้านในช่องพื้น (เช่น S1-S4)';
       case 'draw_outer_line':
         return drawStart
-          ? 'คลิกจุดสิ้นสุดของเส้นขอบนอก (ระบบจะเอาไม้แบบไปเกาะตามเส้นขอบนอก + อมมุม 5 ซม.)'
+          ? 'คลิกจุดสิ้นสุดของเส้นขอบนอก (ระบบจะเอาไม้แบบไปเกาะตามเส้นขอบนอก + อมมุมชน)'
           : 'วิธีที่ 2 (ลากเส้นวงนอก): คลิกจุดเริ่มต้นบนเส้นขอบด้านนอกของคาน';
       case 'draw_outer_box':
         return drawStart
@@ -463,6 +602,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   };
 
   const bannerText = getToolBannerText();
+  const selectedBeamObj = beams.find((b) => b.id === selectedBeamId) || null;
 
   return (
     <div
@@ -475,8 +615,40 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onWheel={handleWheel}
-        className="w-full h-full cursor-crosshair block"
+        className={`w-full h-full block ${
+          dragState
+            ? 'cursor-grabbing'
+            : activeTool === 'select'
+            ? 'cursor-default'
+            : 'cursor-crosshair'
+        }`}
       />
+
+      {/* Floating Selection Quick-Action Bar (Move Hint + Delete Button) */}
+      {selectedBeamObj && activeTool === 'select' && (
+        <div className="absolute top-4 right-4 bg-white/95 backdrop-blur-xs px-3 py-2 rounded-xl border border-blue-200 shadow-md flex items-center gap-3">
+          <div className="flex items-center gap-1.5 text-xs">
+            <Move className="w-3.5 h-3.5 text-blue-600" />
+            <span className="font-bold text-slate-800">{selectedBeamObj.name}</span>
+            <span className="text-slate-500">
+              ({getBeamLengthCm(selectedBeamObj, pixelsPerCm)} ซม.)
+            </span>
+            <span className="text-[11px] text-slate-400 hidden sm:inline">
+              • คลิกค้างเพื่อลากขยับ หรือดึงจุดปลาย
+            </span>
+          </div>
+          {onDeleteBeam && (
+            <button
+              onClick={() => onDeleteBeam(selectedBeamObj.id)}
+              title="ลบคาน/ไม้แบบนี้ (หรือกดปุ่ม Delete บนคีย์บอร์ด)"
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100 transition-colors cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>ลบ (Delete)</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Floating Canvas Controls (Zoom In/Out/Reset) */}
       <div className="absolute bottom-4 left-4 flex items-center gap-1 bg-white/95 backdrop-blur-xs p-1 rounded-lg border border-[#E2E8F0] shadow-sm">
@@ -545,3 +717,4 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     </div>
   );
 };
+

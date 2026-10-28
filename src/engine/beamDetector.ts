@@ -6,6 +6,7 @@ import {
   FormworkHeight,
   Point,
 } from '../types/formwork';
+import { applyAutoCornerExtensions } from './formworkOptimizer';
 import { RawTextItem, RawVectorLine } from './scaleCalibrator';
 
 let beamCounter = 1;
@@ -297,7 +298,7 @@ export function createEdgesFromBoxTool(
   const addInnerLoop = () => {
     if (inMaxX - inMinX < 15 || inMaxY - inMinY < 15) return;
     // Clockwise loop: Top (left->right), Right (top->bottom), Bottom (right->left), Left (bottom->top)
-    // In screen coordinates (y down), 'right' normal of a clockwise loop points INWARD into the box!
+    // Horizontal inner strips span full inner width (0, 0); Vertical inner strips butt between them (-5cm, -5cm) so corners never overlap!
     edges.push(
       createFormworkEdgeElement(
         `${basePrefix}-บน(ใน)`,
@@ -318,8 +319,8 @@ export function createEdgesFromBoxTool(
         heightCm,
         'inner',
         beamWidthCm,
-        0,
-        0
+        -FORMWORK_THICKNESS_CM,
+        -FORMWORK_THICKNESS_CM
       ),
       createFormworkEdgeElement(
         `${basePrefix}-ล่าง(ใน)`,
@@ -340,15 +341,15 @@ export function createEdgesFromBoxTool(
         heightCm,
         'inner',
         beamWidthCm,
-        0,
-        0
+        -FORMWORK_THICKNESS_CM,
+        -FORMWORK_THICKNESS_CM
       )
     );
   };
 
   const addOuterLoop = () => {
     if (outMaxX - outMinX < 15 || outMaxY - outMinY < 15) return;
-    // Clockwise loop: 'left' normal points OUTWARD away from the box!
+    // Clockwise loop: Horizontal outer strips wrap the outer corners (+5cm, +5cm); Vertical outer strips butt flush against them (0, 0)!
     edges.push(
       createFormworkEdgeElement(
         `${basePrefix}-บน(นอก)`,
@@ -369,8 +370,8 @@ export function createEdgesFromBoxTool(
         heightCm,
         'outer',
         beamWidthCm,
-        FORMWORK_THICKNESS_CM,
-        FORMWORK_THICKNESS_CM
+        0,
+        0
       ),
       createFormworkEdgeElement(
         `${basePrefix}-ล่าง(นอก)`,
@@ -391,8 +392,8 @@ export function createEdgesFromBoxTool(
         heightCm,
         'outer',
         beamWidthCm,
-        FORMWORK_THICKNESS_CM,
-        FORMWORK_THICKNESS_CM
+        0,
+        0
       )
     );
   };
@@ -1378,9 +1379,10 @@ export function autoDetectBeamsWithDiagnostics(
     }
   }
 
-  counts.detectedBeams = beams.length;
+  const cleanBeams = applyAutoCornerExtensions(beams, safeScale);
+  counts.detectedBeams = cleanBeams.length;
   return {
-    beams,
+    beams: cleanBeams,
     classifiedLines,
     gridAxes,
     counts,

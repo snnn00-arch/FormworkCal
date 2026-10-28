@@ -44,6 +44,16 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
     fireEvent.click(height40Btn);
 
     expect(screen.getAllByText(/40 ซม./i).length).toBeGreaterThan(1);
+
+    // Drag/move the selected beam on canvas
+    fireEvent.mouseDown(canvas, { clientX: 250, clientY: 100 });
+    fireEvent.mouseMove(canvas, { clientX: 280, clientY: 130 });
+    fireEvent.mouseUp(canvas);
+
+    // Press Delete key to delete the selected beam (B1 ขอบใน)
+    fireEvent.keyDown(window, { key: 'Delete' });
+    expect(screen.queryByText(/แก้ไขคานและแผ่นไม้แบบ: B1 \(ขอบใน\)/i)).not.toBeInTheDocument();
   });
 });
+
 

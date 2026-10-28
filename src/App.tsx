@@ -230,30 +230,87 @@ export const App: React.FC = () => {
       rightSide: { ...b.rightSide, customPanels: undefined },
     }));
     setBeams(freshOptimized);
-    alert('จัดเรียงแผ่นไม้แบบอัตโนมัติ (คิดความหนา 5 ซม. และระยะอมมุมชน) เรียบร้อยแล้ว!');
+    alert('จัดเรียงแผ่นไม้แบบอัตโนมัติ (ป้องกันไม้แบบชน/ทับกัน และคิดความหนา 5 ซม.) เรียบร้อยแล้ว!');
   };
 
   const handleUpdateBeam = (updated: BeamElement) => {
-    setBeams((prev) => prev.map((b) => (b.id === updated.id ? updated : b)));
+    setBeams((prev) =>
+      applyAutoCornerExtensions(
+        prev.map((b) => (b.id === updated.id ? updated : b)),
+        pixelsPerCm
+      )
+    );
+  };
+
+  const handleMoveBeam = (
+    beamId: string,
+    newStart: Point,
+    newEnd: Point,
+    finalize = false
+  ) => {
+    setBeams((prev) => {
+      const moved = prev.map((b) =>
+        b.id === beamId ? { ...b, start: newStart, end: newEnd } : b
+      );
+      return finalize ? applyAutoCornerExtensions(moved, pixelsPerCm) : moved;
+    });
   };
 
   const handleDeleteBeam = (beamId: string) => {
-    setBeams((prev) => prev.filter((b) => b.id !== beamId));
+    setBeams((prev) =>
+      applyAutoCornerExtensions(
+        prev.filter((b) => b.id !== beamId),
+        pixelsPerCm
+      )
+    );
     if (selectedBeamId === beamId) {
       setSelectedBeamId(null);
     }
   };
 
+  // Global keyboard shortcut: Delete / Backspace deletes the selected beam/formwork strip; Escape cancels drawing or selection
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBeamId) {
+        e.preventDefault();
+        handleDeleteBeam(selectedBeamId);
+      } else if (e.key === 'Escape') {
+        if (activeTool !== 'select') {
+          setActiveTool('select');
+        } else if (selectedBeamId) {
+          setSelectedBeamId(null);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedBeamId, activeTool, pixelsPerCm]);
+
   const handleResetBeamToAuto = (beamId: string) => {
     setBeams((prev) =>
-      prev.map((b) => {
-        if (b.id !== beamId) return b;
-        return {
-          ...b,
-          leftSide: { ...b.leftSide, customPanels: undefined },
-          rightSide: { ...b.rightSide, customPanels: undefined },
-        };
-      })
+      applyAutoCornerExtensions(
+        prev.map((b) => {
+          if (b.id !== beamId) return b;
+          return {
+            ...b,
+            leftSide: { ...b.leftSide, customPanels: undefined },
+            rightSide: { ...b.rightSide, customPanels: undefined },
+          };
+        }),
+        pixelsPerCm
+      )
     );
   };
 
@@ -300,6 +357,8 @@ export const App: React.FC = () => {
           pixelsPerCm={pixelsPerCm}
           selectedBeamId={selectedBeamId}
           onSelectBeam={setSelectedBeamId}
+          onMoveBeam={handleMoveBeam}
+          onDeleteBeam={handleDeleteBeam}
           activeTool={activeTool}
           onAddBeam={handleAddBeam}
           scaleMode={scaleMode}
