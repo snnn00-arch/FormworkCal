@@ -119,6 +119,64 @@ describe('formworkOptimizer', () => {
       1
     );
     checkNoOverlaps(boxEdges);
+
+    // Outer Box (ตีกรอบวงนอก): verify ALL panels stay strictly within the drawn box [100, 500] x [100, 400] and never overlap
+    const outerBoxEdges = applyAutoCornerExtensions(
+      createEdgesFromBoxTool('S2', { x: 100, y: 100 }, { x: 500, y: 400 }, 'outer', 60, 1, 20, true),
+      1
+    );
+    checkNoOverlaps(outerBoxEdges);
+    const outerBoxPanels = computeAllBeamPanels(outerBoxEdges, 1);
+    for (const p of outerBoxPanels) {
+      const parent = outerBoxEdges.find((b) => b.id === p.beamId)!;
+      const poly = getPlacedPanelPolygon(p, parent, 1);
+      for (const pt of poly) {
+        expect(pt.x).toBeGreaterThanOrEqual(100 - 0.1);
+        expect(pt.x).toBeLessThanOrEqual(500 + 0.1);
+        expect(pt.y).toBeGreaterThanOrEqual(100 - 0.1);
+        expect(pt.y).toBeLessThanOrEqual(400 + 0.1);
+      }
+    }
+
+    // Secondary Beam (คานซอย) T-junction: main beam B_main (0, 200)->(600, 200) met by secondary beam B_sec (300, 210)->(300, 500)
+    const tJunctionBeams = applyAutoCornerExtensions(
+      [
+        {
+          id: 'b-main',
+          name: 'B1',
+          start: { x: 0, y: 200 },
+          end: { x: 600, y: 200 },
+          widthCm: 20,
+          defaultHeightCm: 60,
+          thicknessCm: 5,
+          leftSide: { side: 'left', heightCm: 60, startExtensionCm: 0, endExtensionCm: 0 },
+          rightSide: { side: 'right', heightCm: 60, startExtensionCm: 0, endExtensionCm: 0 },
+        },
+        {
+          id: 'b-sec',
+          name: 'B2 (คานซอย)',
+          start: { x: 300, y: 210 },
+          end: { x: 300, y: 500 },
+          widthCm: 20,
+          defaultHeightCm: 60,
+          thicknessCm: 5,
+          leftSide: { side: 'left', heightCm: 60, startExtensionCm: 0, endExtensionCm: 0 },
+          rightSide: { side: 'right', heightCm: 60, startExtensionCm: 0, endExtensionCm: 0 },
+        },
+      ],
+      1
+    );
+    checkNoOverlaps(tJunctionBeams);
+    // Ensure main beam's bottom side (leftSide, +y) has NO panel covering the secondary beam mouth x in (291, 309)
+    const tPanels = computeAllBeamPanels(tJunctionBeams, 1);
+    const mainBottomPanels = tPanels.filter((p) => p.beamId === 'b-main' && p.side === 'left');
+    for (const mp of mainBottomPanels) {
+      const poly = getPlacedPanelPolygon(mp, tJunctionBeams[0], 1);
+      const minX = Math.min(...poly.map((pt) => pt.x));
+      const maxX = Math.max(...poly.map((pt) => pt.x));
+      const overlapsSecondaryMouth = Math.min(maxX, 309) - Math.max(minX, 291) > 1;
+      expect(overlapsSecondaryMouth).toBe(false);
+    }
   });
 
   it('aggregates rental summary across all 12 SKUs (3 lengths x 4 heights) and free-length heights', () => {
@@ -146,4 +204,5 @@ describe('formworkOptimizer', () => {
     expect(summary.freeTotalsByHeightCm[70].totalLengthCm).toBe(5);
   });
 });
+
 

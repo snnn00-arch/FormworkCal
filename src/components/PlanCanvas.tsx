@@ -5,6 +5,7 @@ import {
   PlacedPanel,
   Point,
 } from '../types/formwork';
+import { SnapPoint } from '../engine/beamDetector';
 import { getBeamLengthCm, getPlacedPanelPolygon } from '../engine/formworkOptimizer';
 import { ZoomIn, ZoomOut, RotateCcw, Upload, Trash2, Move } from 'lucide-react';
 
@@ -13,6 +14,7 @@ interface PlanCanvasProps {
   pdfImageUrl: string | null;
   beams: BeamElement[];
   panels: PlacedPanel[];
+  snapPoints?: SnapPoint[];
   pixelsPerCm: number;
   selectedBeamId: string | null;
   onSelectBeam: (beamId: string | null) => void;
@@ -67,11 +69,29 @@ function isPointInOrNearPolygon(
   return false;
 }
 
+function findNearestSnapPoint(
+  pt: Point,
+  snapPoints: SnapPoint[],
+  maxDistPx: number
+): SnapPoint | null {
+  let best: SnapPoint | null = null;
+  let bestDist = maxDistPx;
+  for (const sp of snapPoints) {
+    const d = Math.hypot(pt.x - sp.x, pt.y - sp.y);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = sp;
+    }
+  }
+  return best;
+}
+
 export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   canvasRef,
   pdfImageUrl,
   beams,
   panels,
+  snapPoints = [],
   pixelsPerCm,
   selectedBeamId,
   onSelectBeam,
@@ -92,9 +112,10 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   const [dragState, setDragState] = useState<DragBeamState | null>(null);
   const [selectedPanelId, setSelectedPanelId] = useState<string | null>(null);
 
-  // Drawing line / box state
+  // Drawing line / box state + Magnetic Column Corner Snap state
   const [drawStart, setDrawStart] = useState<Point | null>(null);
   const [currentMousePos, setCurrentMousePos] = useState<Point | null>(null);
+  const [activeSnap, setActiveSnap] = useState<SnapPoint | null>(null);
 
   // Calibration points state
   const [calibP1, setCalibP1] = useState<Point | null>(null);
@@ -308,8 +329,21 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       }
     }
 
-    // 5. Draw Temporary Drawing Line or Box Preview
+    // 5. Draw Temporary Drawing Line or Box Preview + Column Corner Snap Indicator
     const isDrawingTool = activeTool !== 'select';
+    if (isDrawingTool && snapPoints.length > 0) {
+      // Subtle guide dots at column corners when in manual drawing mode
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.35)';
+      const dotR = 2.2 / zoom;
+      for (const sp of snapPoints) {
+        if (sp.x >= startX && sp.x <= endX && sp.y >= startY && sp.y <= endY) {
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, dotR, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
     if (isDrawingTool && drawStart && currentMousePos) {
       const isBoxTool = activeTool === 'draw_inner_box' || activeTool === 'draw_outer_box';
       const isOuter = activeTool === 'draw_outer_line' || activeTool === 'draw_outer_box';
@@ -339,6 +373,42 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       ctx.fill();
     }
 
+    // 5b. Draw Active Magnetic Column Corner Snap Box (□ Snap มุมเสา)
+    if (
+      activeSnap &&
+      (isDrawingTool ||
+        dragState?.mode === 'move_start' ||
+        dragState?.mode === 'move_end')
+    ) {
+      const boxHalf = 6.5 / zoom;
+      ctx.strokeStyle = '#10B981';
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.18)';
+      ctx.lineWidth = 2.2 / zoom;
+      ctx.fillRect(
+        activeSnap.x - boxHalf,
+        activeSnap.y - boxHalf,
+        boxHalf * 2,
+        boxHalf * 2
+      );
+      ctx.strokeRect(
+        activeSnap.x - boxHalf,
+        activeSnap.y - boxHalf,
+        boxHalf * 2,
+        boxHalf * 2
+      );
+
+      // Snap label badge
+      ctx.fillStyle = '#047857';
+      ctx.font = `700 ${Math.max(9, 10 / zoom)}px "Plus Jakarta Sans", sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(
+        `Snap: ${activeSnap.label}`,
+        activeSnap.x + 8 / zoom,
+        activeSnap.y - 6 / zoom
+      );
+    }
+
     // 6. Draw Scale Calibration Points
     if (scaleMode !== 'none' && calibP1) {
       ctx.fillStyle = '#F59E0B';
@@ -365,6 +435,9 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   }, [
     beams,
     panels,
+    snapPoints,
+    activeSnap,
+    dragState,
     pdfImage,
     pan,
     zoom,
@@ -380,7 +453,13 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
 
   // Mouse Handlers for Pan, Draw, Select, Drag-Move, and Scale Calibration
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const world = screenToWorld(e.clientX, e.clientY);
+    const rawWorld = screenToWorld(e.clientX, e.clientY);
+    const snapTolPx = 16 / zoom;
+    const snapped =
+      activeTool !== 'select' && snapPoints.length > 0
+        ? findNearestSnapPoint(rawWorld, snapPoints, snapTolPx)
+        : null;
+    const world: Point = snapped ? { x: snapped.x, y: snapped.y } : rawWorld;
 
     // Scale calibration mode
     if (scaleMode !== 'none') {
@@ -393,7 +472,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       return;
     }
 
-    // Draw Line or Box Tool (Inner / Outer Perimeter)
+    // Draw Line or Box Tool (Inner / Outer Perimeter) with Column Corner Snapping
     if (activeTool !== 'select') {
       if (!drawStart) {
         setDrawStart(world);
@@ -402,6 +481,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
           onAddBeam(drawStart, world, activeTool);
         }
         setDrawStart(null);
+        setActiveSnap(null);
       }
       return;
     }
@@ -496,13 +576,25 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const world = screenToWorld(e.clientX, e.clientY);
+    const rawWorld = screenToWorld(e.clientX, e.clientY);
+    const snapTolPx = 16 / zoom;
+    const shouldSnap =
+      activeTool !== 'select' ||
+      dragState?.mode === 'move_start' ||
+      dragState?.mode === 'move_end';
+    const nearestSnap =
+      shouldSnap && snapPoints.length > 0
+        ? findNearestSnapPoint(rawWorld, snapPoints, snapTolPx)
+        : null;
+
+    setActiveSnap(nearestSnap);
+    const world: Point = nearestSnap ? { x: nearestSnap.x, y: nearestSnap.y } : rawWorld;
     setCurrentMousePos(world);
 
     // Dragging a selected beam/formwork strip or its endpoint
     if (dragState && onMoveBeam) {
-      const dx = world.x - dragState.startMouse.x;
-      const dy = world.y - dragState.startMouse.y;
+      const dx = rawWorld.x - dragState.startMouse.x;
+      const dy = rawWorld.y - dragState.startMouse.y;
       if (!dragState.hasMoved && Math.hypot(dx, dy) < 2 / zoom) {
         return;
       }
@@ -515,19 +607,27 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
           false
         );
       } else if (dragState.mode === 'move_start') {
-        let nextStart = { x: dragState.origStart.x + dx, y: dragState.origStart.y + dy };
-        if (Math.abs(nextStart.y - dragState.origEnd.y) <= 8 / zoom) {
-          nextStart = { x: nextStart.x, y: dragState.origEnd.y };
-        } else if (Math.abs(nextStart.x - dragState.origEnd.x) <= 8 / zoom) {
-          nextStart = { x: dragState.origEnd.x, y: nextStart.y };
+        let nextStart = nearestSnap
+          ? { x: nearestSnap.x, y: nearestSnap.y }
+          : { x: dragState.origStart.x + dx, y: dragState.origStart.y + dy };
+        if (!nearestSnap) {
+          if (Math.abs(nextStart.y - dragState.origEnd.y) <= 8 / zoom) {
+            nextStart = { x: nextStart.x, y: dragState.origEnd.y };
+          } else if (Math.abs(nextStart.x - dragState.origEnd.x) <= 8 / zoom) {
+            nextStart = { x: dragState.origEnd.x, y: nextStart.y };
+          }
         }
         onMoveBeam(dragState.beamId, nextStart, dragState.origEnd, false);
       } else if (dragState.mode === 'move_end') {
-        let nextEnd = { x: dragState.origEnd.x + dx, y: dragState.origEnd.y + dy };
-        if (Math.abs(nextEnd.y - dragState.origStart.y) <= 8 / zoom) {
-          nextEnd = { x: nextEnd.x, y: dragState.origStart.y };
-        } else if (Math.abs(nextEnd.x - dragState.origStart.x) <= 8 / zoom) {
-          nextEnd = { x: dragState.origStart.x, y: nextEnd.y };
+        let nextEnd = nearestSnap
+          ? { x: nearestSnap.x, y: nearestSnap.y }
+          : { x: dragState.origEnd.x + dx, y: dragState.origEnd.y + dy };
+        if (!nearestSnap) {
+          if (Math.abs(nextEnd.y - dragState.origStart.y) <= 8 / zoom) {
+            nextEnd = { x: nextEnd.x, y: dragState.origStart.y };
+          } else if (Math.abs(nextEnd.x - dragState.origStart.x) <= 8 / zoom) {
+            nextEnd = { x: dragState.origStart.x, y: nextEnd.y };
+          }
         }
         onMoveBeam(dragState.beamId, dragState.origStart, nextEnd, false);
       }

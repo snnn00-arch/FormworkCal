@@ -242,10 +242,14 @@ export function applyAutoCornerExtensions(
 
     // Single-edge mode (วาดคานวงใน / วงนอก / ตีกรอบวงใน / วงนอก)
     if (beam.attachMode === 'single_edge') {
-      const role = beam.edgeRole || 'inner';
-      const hasPerpPartnerAtPoint = (pt: Point): boolean =>
-        deduplicated.some((other) => {
+      const leftActive = beam.leftSide.enabled !== false;
+      const rightActive = beam.rightSide.enabled !== false;
+      const activeSign = leftActive ? 1 : -1;
+
+      const computeSingleEdgeCornerExt = (pt: Point, currentExt: number): number => {
+        const partner = deduplicated.find((other) => {
           if (other.id === beam.id) return false;
+          if (beam.edgeRole && other.edgeRole && beam.edgeRole !== other.edgeRole) return false;
           const oDx = other.end.x - other.start.x;
           const oDy = other.end.y - other.start.y;
           const otherIsH = Math.abs(oDx) >= Math.abs(oDy);
@@ -253,24 +257,36 @@ export function applyAutoCornerExtensions(
           return pointToSegmentDist(pt, other.start, other.end) <= snapThresholdPx;
         });
 
-      const startHasPartner = hasPerpPartnerAtPoint(beam.start);
-      const endHasPartner = hasPerpPartnerAtPoint(beam.end);
+        if (!partner) {
+          return currentExt;
+        }
 
-      let extStart = 0;
-      let extEnd = 0;
+        const oMid = {
+          x: (partner.start.x + partner.end.x) / 2,
+          y: (partner.start.y + partner.end.y) / 2,
+        };
+        const dotActiveN =
+          (oMid.x - pt.x) * (nx * activeSign) + (oMid.y - pt.y) * (ny * activeSign);
 
-      if (role === 'inner') {
-        // Horizontal inner strips run full inner length (0); Vertical inner strips butt between them (-5cm) when meeting a corner
-        extStart = !isHorizontal && startHasPartner ? -FORMWORK_THICKNESS_CM : 0;
-        extEnd = !isHorizontal && endHasPartner ? -FORMWORK_THICKNESS_CM : 0;
-      } else {
-        // Outer perimeter: Horizontal outer strips wrap the corner (+5cm); Vertical outer strips butt flush (0cm) when meeting a Horizontal outer corner
-        extStart = !isHorizontal && startHasPartner ? 0 : FORMWORK_THICKNESS_CM;
-        extEnd = !isHorizontal && endHasPartner ? 0 : FORMWORK_THICKNESS_CM;
-      }
+        if (dotActiveN > 0) {
+          // Formwork is on the INSIDE of the corner (e.g., ตีกรอบวงนอก where formwork stays inside the drawn box, or ตีกรอบวงใน inner loop)
+          // Never overshoot the corner (0 for horizontal, -5cm for vertical so corners never overlap and never leave the drawn box!)
+          return isHorizontal ? 0 : -FORMWORK_THICKNESS_CM;
+        } else {
+          // Formwork is on the OUTSIDE of the corner (e.g., expanded +20cm outer ring of ตีกรอบวงใน)
+          return isHorizontal ? FORMWORK_THICKNESS_CM : 0;
+        }
+      };
 
-      const leftActive = beam.leftSide.enabled !== false;
-      const rightActive = beam.rightSide.enabled !== false;
+      const curStartExt = leftActive
+        ? beam.leftSide.startExtensionCm || 0
+        : beam.rightSide.startExtensionCm || 0;
+      const curEndExt = leftActive
+        ? beam.leftSide.endExtensionCm || 0
+        : beam.rightSide.endExtensionCm || 0;
+
+      const extStart = computeSingleEdgeCornerExt(beam.start, curStartExt);
+      const extEnd = computeSingleEdgeCornerExt(beam.end, curEndExt);
 
       return {
         ...beam,
@@ -499,7 +515,8 @@ export function computeAllBeamPanels(
 
     let intervals: Array<[number, number]> = [[0, st.totalSideLengthCm]];
 
-    // 1. Cut out interior crossings where a perpendicular dual_beam's concrete body intersects this strip
+    // 1. Cut out interior T-junctions & + Cross-junctions where a perpendicular beam (เช่น คานซอย)
+    // branches off or crosses this side of the beam, so formwork NEVER covers the secondary beam!
     for (const other of beams) {
       if (other.id === st.beam.id) continue;
       if (other.attachMode === 'single_edge') continue;
@@ -508,24 +525,38 @@ export function computeAllBeamPanels(
       const otherIsH = Math.abs(oDx) >= Math.abs(oDy);
       if (otherIsH === st.isHorizontal) continue;
 
-      const halfOtherW = ((other.widthCm || 20) * safeScale) / 2;
-      const oMinX = Math.min(other.start.x, other.end.x) - (otherIsH ? 0 : halfOtherW);
-      const oMaxX = Math.max(other.start.x, other.end.x) + (otherIsH ? 0 : halfOtherW);
-      const oMinY = Math.min(other.start.y, other.end.y) - (otherIsH ? halfOtherW : 0);
-      const oMaxY = Math.max(other.start.y, other.end.y) + (otherIsH ? halfOtherW : 0);
+      // Project other's start and end onto st's outward normal (st.nx * st.sign, st.ny * st.sign)
+      const d1Cm =
+        (((other.start.x - st.beam.start.x) * st.nx +
+          (other.start.y - st.beam.start.y) * st.ny) *
+          st.sign) /
+        safeScale;
+      const d2Cm =
+        (((other.end.x - st.beam.start.x) * st.nx +
+          (other.end.y - st.beam.start.y) * st.ny) *
+          st.sign) /
+        safeScale;
+      const minOutwardCm = Math.min(d1Cm, d2Cm);
+      const maxOutwardCm = Math.max(d1Cm, d2Cm);
 
-      const ovX = Math.min(st.maxX, oMaxX) - Math.max(st.minX, oMinX);
-      const ovY = Math.min(st.maxY, oMaxY) - Math.max(st.minY, oMinY);
-      if (ovX > 1.0 && ovY > 1.0) {
-        const boxCenter = {
-          x: (Math.max(st.minX, oMinX) + Math.min(st.maxX, oMaxX)) / 2,
-          y: (Math.max(st.minY, oMinY) + Math.min(st.maxY, oMaxY)) / 2,
+      // If other reaches or crosses st.beam (minOutwardCm <= 28cm) AND extends outward onto st.side (maxOutwardCm >= 12cm)
+      if (minOutwardCm <= 28 && maxOutwardCm >= 12) {
+        const otherMid = {
+          x: (other.start.x + other.end.x) / 2,
+          y: (other.start.y + other.end.y) / 2,
         };
         const centerCm =
-          ((boxCenter.x - st.sideStartX) * st.ux + (boxCenter.y - st.sideStartY) * st.uy) /
+          ((otherMid.x - st.sideStartX) * st.ux + (otherMid.y - st.sideStartY) * st.uy) /
           safeScale;
-        const halfCutCm = Math.round((other.widthCm || 20) / 2);
-        intervals = subtractInterval(intervals, centerCm - halfCutCm, centerCm + halfCutCm);
+
+        // If this secondary beam / perpendicular beam hits inside the span of st
+        if (centerCm > 5 && centerCm < st.totalSideLengthCm - 5) {
+          const halfOtherW = Math.round((other.widthCm || 20) / 2);
+          const halfCutCm = st.isHorizontal
+            ? halfOtherW
+            : halfOtherW + FORMWORK_THICKNESS_CM;
+          intervals = subtractInterval(intervals, centerCm - halfCutCm, centerCm + halfCutCm);
+        }
       }
     }
 

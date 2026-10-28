@@ -297,14 +297,14 @@ export function createEdgesFromBoxTool(
 
   const addInnerLoop = () => {
     if (inMaxX - inMinX < 15 || inMaxY - inMinY < 15) return;
-    // Clockwise loop: Top (left->right), Right (top->bottom), Bottom (right->left), Left (bottom->top)
+    // Clockwise loop in screen coordinates (+Y down): 'left' points INWARD into the box!
     // Horizontal inner strips span full inner width (0, 0); Vertical inner strips butt between them (-5cm, -5cm) so corners never overlap!
     edges.push(
       createFormworkEdgeElement(
         `${basePrefix}-บน(ใน)`,
         { x: inMinX, y: inMinY },
         { x: inMaxX, y: inMinY },
-        'right',
+        'left',
         heightCm,
         'inner',
         beamWidthCm,
@@ -315,7 +315,7 @@ export function createEdgesFromBoxTool(
         `${basePrefix}-ขวา(ใน)`,
         { x: inMaxX, y: inMinY },
         { x: inMaxX, y: inMaxY },
-        'right',
+        'left',
         heightCm,
         'inner',
         beamWidthCm,
@@ -326,7 +326,7 @@ export function createEdgesFromBoxTool(
         `${basePrefix}-ล่าง(ใน)`,
         { x: inMaxX, y: inMaxY },
         { x: inMinX, y: inMaxY },
-        'right',
+        'left',
         heightCm,
         'inner',
         beamWidthCm,
@@ -337,7 +337,7 @@ export function createEdgesFromBoxTool(
         `${basePrefix}-ซ้าย(ใน)`,
         { x: inMinX, y: inMaxY },
         { x: inMinX, y: inMinY },
-        'right',
+        'left',
         heightCm,
         'inner',
         beamWidthCm,
@@ -349,53 +349,104 @@ export function createEdgesFromBoxTool(
 
   const addOuterLoop = () => {
     if (outMaxX - outMinX < 15 || outMaxY - outMinY < 15) return;
-    // Clockwise loop: Horizontal outer strips wrap the outer corners (+5cm, +5cm); Vertical outer strips butt flush against them (0, 0)!
-    edges.push(
-      createFormworkEdgeElement(
-        `${basePrefix}-บน(นอก)`,
-        { x: outMinX, y: outMinY },
-        { x: outMaxX, y: outMinY },
-        'left',
-        heightCm,
-        'outer',
-        beamWidthCm,
-        FORMWORK_THICKNESS_CM,
-        FORMWORK_THICKNESS_CM
-      ),
-      createFormworkEdgeElement(
-        `${basePrefix}-ขวา(นอก)`,
-        { x: outMaxX, y: outMinY },
-        { x: outMaxX, y: outMaxY },
-        'left',
-        heightCm,
-        'outer',
-        beamWidthCm,
-        0,
-        0
-      ),
-      createFormworkEdgeElement(
-        `${basePrefix}-ล่าง(นอก)`,
-        { x: outMaxX, y: outMaxY },
-        { x: outMinX, y: outMaxY },
-        'left',
-        heightCm,
-        'outer',
-        beamWidthCm,
-        FORMWORK_THICKNESS_CM,
-        FORMWORK_THICKNESS_CM
-      ),
-      createFormworkEdgeElement(
-        `${basePrefix}-ซ้าย(นอก)`,
-        { x: outMinX, y: outMaxY },
-        { x: outMinX, y: outMinY },
-        'left',
-        heightCm,
-        'outer',
-        beamWidthCm,
-        0,
-        0
-      )
-    );
+    if (role === 'outer') {
+      // When user explicitly draws Outer Box (ตีกรอบวงนอก), use 'left' (inward in clockwise screen coords) so 100% of formwork stays INSIDE [outMinX..outMaxX, outMinY..outMaxY]!
+      edges.push(
+        createFormworkEdgeElement(
+          `${basePrefix}-บน(นอก)`,
+          { x: outMinX, y: outMinY },
+          { x: outMaxX, y: outMinY },
+          'left',
+          heightCm,
+          'outer',
+          beamWidthCm,
+          0,
+          0
+        ),
+        createFormworkEdgeElement(
+          `${basePrefix}-ขวา(นอก)`,
+          { x: outMaxX, y: outMinY },
+          { x: outMaxX, y: outMaxY },
+          'left',
+          heightCm,
+          'outer',
+          beamWidthCm,
+          -FORMWORK_THICKNESS_CM,
+          -FORMWORK_THICKNESS_CM
+        ),
+        createFormworkEdgeElement(
+          `${basePrefix}-ล่าง(นอก)`,
+          { x: outMaxX, y: outMaxY },
+          { x: outMinX, y: outMaxY },
+          'left',
+          heightCm,
+          'outer',
+          beamWidthCm,
+          0,
+          0
+        ),
+        createFormworkEdgeElement(
+          `${basePrefix}-ซ้าย(นอก)`,
+          { x: outMinX, y: outMaxY },
+          { x: outMinX, y: outMinY },
+          'left',
+          heightCm,
+          'outer',
+          beamWidthCm,
+          -FORMWORK_THICKNESS_CM,
+          -FORMWORK_THICKNESS_CM
+        )
+      );
+    } else {
+      // Paired outer loop expanded from Inner Box (ตีกรอบวงใน): 'right' points OUTWARD in clockwise screen coords.
+      // Horizontal outer strips wrap the outer corners (+5cm, +5cm); Vertical outer strips butt flush (0, 0)
+      edges.push(
+        createFormworkEdgeElement(
+          `${basePrefix}-บน(นอก)`,
+          { x: outMinX, y: outMinY },
+          { x: outMaxX, y: outMinY },
+          'right',
+          heightCm,
+          'outer',
+          beamWidthCm,
+          FORMWORK_THICKNESS_CM,
+          FORMWORK_THICKNESS_CM
+        ),
+        createFormworkEdgeElement(
+          `${basePrefix}-ขวา(นอก)`,
+          { x: outMaxX, y: outMinY },
+          { x: outMaxX, y: outMaxY },
+          'right',
+          heightCm,
+          'outer',
+          beamWidthCm,
+          0,
+          0
+        ),
+        createFormworkEdgeElement(
+          `${basePrefix}-ล่าง(นอก)`,
+          { x: outMaxX, y: outMaxY },
+          { x: outMinX, y: outMaxY },
+          'right',
+          heightCm,
+          'outer',
+          beamWidthCm,
+          FORMWORK_THICKNESS_CM,
+          FORMWORK_THICKNESS_CM
+        ),
+        createFormworkEdgeElement(
+          `${basePrefix}-ซ้าย(นอก)`,
+          { x: outMinX, y: outMaxY },
+          { x: outMinX, y: outMinY },
+          'right',
+          heightCm,
+          'outer',
+          beamWidthCm,
+          0,
+          0
+        )
+      );
+    }
   };
 
   if (role === 'inner') {
@@ -1379,6 +1430,51 @@ export function autoDetectBeamsWithDiagnostics(
     }
   }
 
+  // =========================================================================
+  // PASS 4: Snap Secondary Beam (คานซอย) Endpoints to Perpendicular Main Beams
+  // Ensures T-junctions where secondary beams meet main beams are cleanly registered
+  // so main beam formwork splits around secondary beams and never covers them.
+  // =========================================================================
+  const tJunctionSnapTol = Math.max(32, 32 * safeScale);
+  for (const b of beams) {
+    const isH = Math.abs(b.end.x - b.start.x) >= Math.abs(b.end.y - b.start.y);
+    for (const other of beams) {
+      if (other.id === b.id) continue;
+      const otherIsH = Math.abs(other.end.x - other.start.x) >= Math.abs(other.end.y - other.start.y);
+      if (otherIsH === isH) continue;
+
+      if (isH) {
+        // b is Horizontal (y = bY), other is Vertical (x = oX, y in [oMinY, oMaxY])
+        const bY = (b.start.y + b.end.y) / 2;
+        const oX = (other.start.x + other.end.x) / 2;
+        const oMinY = Math.min(other.start.y, other.end.y) - tJunctionSnapTol;
+        const oMaxY = Math.max(other.start.y, other.end.y) + tJunctionSnapTol;
+        if (bY >= oMinY && bY <= oMaxY) {
+          if (Math.abs(b.start.x - oX) <= tJunctionSnapTol) {
+            b.start = { x: oX, y: b.start.y };
+          }
+          if (Math.abs(b.end.x - oX) <= tJunctionSnapTol) {
+            b.end = { x: oX, y: b.end.y };
+          }
+        }
+      } else {
+        // b is Vertical (x = bX), other is Horizontal (y = oY, x in [oMinX, oMaxX])
+        const bX = (b.start.x + b.end.x) / 2;
+        const oY = (other.start.y + other.end.y) / 2;
+        const oMinX = Math.min(other.start.x, other.end.x) - tJunctionSnapTol;
+        const oMaxX = Math.max(other.start.x, other.end.x) + tJunctionSnapTol;
+        if (bX >= oMinX && bX <= oMaxX) {
+          if (Math.abs(b.start.y - oY) <= tJunctionSnapTol) {
+            b.start = { x: b.start.x, y: oY };
+          }
+          if (Math.abs(b.end.y - oY) <= tJunctionSnapTol) {
+            b.end = { x: b.end.x, y: oY };
+          }
+        }
+      }
+    }
+  }
+
   const cleanBeams = applyAutoCornerExtensions(beams, safeScale);
   counts.detectedBeams = cleanBeams.length;
   return {
@@ -1387,6 +1483,109 @@ export function autoDetectBeamsWithDiagnostics(
     gridAxes,
     counts,
   };
+}
+
+export interface SnapPoint {
+  x: number;
+  y: number;
+  kind: 'column_corner' | 'line_corner' | 'beam_endpoint';
+  label: string;
+}
+
+/**
+ * Extracts magnetic Snap Points at Column Corners (มุมเสา), PDF Vector Line Intersections,
+ * and Existing Beam Corners so manual drawing tools snap accurately to columns on imported plans.
+ */
+export function extractColumnSnapPoints(
+  lines: RawVectorLine[],
+  texts: RawTextItem[],
+  beams: BeamElement[],
+  pixelsPerCm: number,
+  beamWidthCm: number = DEFAULT_BEAM_WIDTH_CM,
+  pageDimensions?: { width: number; height: number }
+): SnapPoint[] {
+  const safeScale = pixelsPerCm > 0 ? pixelsPerCm : 1;
+  const halfW = (beamWidthCm * safeScale) / 2;
+  const rawPoints: SnapPoint[] = [];
+
+  if (lines.length > 0) {
+    const classified = classifyPlanLines(lines, texts, pageDimensions);
+    const grids = extractGridAxes(classified, texts);
+
+    // 1. 4 Column Corners around every Grid Intersection (มุมเสารอบจุดตัดกริด)
+    for (const vg of grids.vertical) {
+      for (const hg of grids.horizontal) {
+        const cx = vg.coord;
+        const cy = hg.coord;
+        rawPoints.push(
+          { x: cx - halfW, y: cy - halfW, kind: 'column_corner', label: 'มุมเสา' },
+          { x: cx + halfW, y: cy - halfW, kind: 'column_corner', label: 'มุมเสา' },
+          { x: cx - halfW, y: cy + halfW, kind: 'column_corner', label: 'มุมเสา' },
+          { x: cx + halfW, y: cy + halfW, kind: 'column_corner', label: 'มุมเสา' }
+        );
+      }
+    }
+
+    // 2. Intersections of Horizontal & Vertical beam/column lines directly from the PDF plan
+    const horizLines = classified.filter(
+      (c) => c.category === 'beam_candidate' && c.orientation === 'horizontal'
+    );
+    const vertLines = classified.filter(
+      (c) => c.category === 'beam_candidate' && c.orientation === 'vertical'
+    );
+    const intersectTol = Math.max(8, 8 * safeScale);
+
+    for (const hl of horizLines) {
+      for (const vl of vertLines) {
+        if (
+          vl.coord >= hl.start - intersectTol &&
+          vl.coord <= hl.end + intersectTol &&
+          hl.coord >= vl.start - intersectTol &&
+          hl.coord <= vl.end + intersectTol
+        ) {
+          rawPoints.push({
+            x: vl.coord,
+            y: hl.coord,
+            kind: 'column_corner',
+            label: 'มุมเสา/คาน',
+          });
+        }
+      }
+    }
+  }
+
+  // 3. Corners and endpoints of existing beams on canvas
+  for (const b of beams) {
+    rawPoints.push(
+      { x: b.start.x, y: b.start.y, kind: 'beam_endpoint', label: 'มุมคาน' },
+      { x: b.end.x, y: b.end.y, kind: 'beam_endpoint', label: 'มุมคาน' }
+    );
+    if (b.attachMode !== 'single_edge') {
+      const dx = b.end.x - b.start.x;
+      const dy = b.end.y - b.start.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const hw = ((b.widthCm || beamWidthCm) * safeScale) / 2;
+      rawPoints.push(
+        { x: b.start.x + nx * hw, y: b.start.y + ny * hw, kind: 'column_corner', label: 'มุมเสา/คาน' },
+        { x: b.start.x - nx * hw, y: b.start.y - ny * hw, kind: 'column_corner', label: 'มุมเสา/คาน' },
+        { x: b.end.x + nx * hw, y: b.end.y + ny * hw, kind: 'column_corner', label: 'มุมเสา/คาน' },
+        { x: b.end.x - nx * hw, y: b.end.y - ny * hw, kind: 'column_corner', label: 'มุมเสา/คาน' }
+      );
+    }
+  }
+
+  // Deduplicate points within 2.5 px
+  const deduped: SnapPoint[] = [];
+  for (const pt of rawPoints) {
+    const exists = deduped.some((d) => Math.hypot(d.x - pt.x, d.y - pt.y) < 2.5);
+    if (!exists) {
+      deduped.push(pt);
+    }
+  }
+
+  return deduped;
 }
 
 export function autoDetectBeamsFromVectorLines(

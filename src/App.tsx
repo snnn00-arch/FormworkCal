@@ -21,6 +21,7 @@ import {
   autoDetectBeamsWithDiagnostics,
   createEdgesFromBoxTool,
   createEdgesFromLineTool,
+  extractColumnSnapPoints,
 } from './engine/beamDetector';
 import {
   downloadCsvFile,
@@ -62,6 +63,18 @@ export const App: React.FC = () => {
   const summary = useMemo(() => {
     return computeRentalSummary(panels);
   }, [panels]);
+
+  // Magnetic Column Corner & Beam Intersection Snap Points for Manual Drawing
+  const snapPoints = useMemo(() => {
+    return extractColumnSnapPoints(
+      vectorLines,
+      planTexts,
+      beams,
+      pixelsPerCm,
+      defaultBeamWidthCm,
+      pdfDimensions
+    );
+  }, [vectorLines, planTexts, beams, pixelsPerCm, defaultBeamWidthCm, pdfDimensions]);
 
   // Action Handlers
   const handleUploadPdf = async (file: File) => {
@@ -354,6 +367,7 @@ export const App: React.FC = () => {
           pdfImageUrl={pdfImageUrl}
           beams={beams}
           panels={panels}
+          snapPoints={snapPoints}
           pixelsPerCm={pixelsPerCm}
           selectedBeamId={selectedBeamId}
           onSelectBeam={setSelectedBeamId}

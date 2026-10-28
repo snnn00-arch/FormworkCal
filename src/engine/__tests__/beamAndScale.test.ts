@@ -11,6 +11,7 @@ import {
   classifyPlanLines,
   createEdgesFromLineTool,
   createEdgesFromBoxTool,
+  extractColumnSnapPoints,
   inferBeamHeightFromNearbyTexts,
   generateSampleBeamPlan,
 } from '../beamDetector';
@@ -209,7 +210,23 @@ describe('scaleCalibrator & beamDetector', () => {
     );
     // |0.65 - 0.15| = 0.50m = 50cm
     expect(inferredHeight).toBe(50);
+
+    // Column corner snap point extraction around grid intersection (200, 250) with 20cm column width (halfW = 10)
+    const snapLines: RawVectorLine[] = [
+      { x1: 200, y1: 50, x2: 200, y2: 650 },
+      { x1: 50, y1: 250, x2: 850, y2: 250 },
+    ];
+    const snapTexts: RawTextItem[] = [
+      { text: '1', x: 200, y: 45 },
+      { text: 'A', x: 45, y: 250 },
+    ];
+    const snaps = extractColumnSnapPoints(snapLines, snapTexts, [], 1.0, 20);
+    expect(snaps.some((s) => s.x === 190 && s.y === 240)).toBe(true);
+    expect(snaps.some((s) => s.x === 210 && s.y === 240)).toBe(true);
+    expect(snaps.some((s) => s.x === 190 && s.y === 260)).toBe(true);
+    expect(snaps.some((s) => s.x === 210 && s.y === 260)).toBe(true);
   });
 });
+
 
 
