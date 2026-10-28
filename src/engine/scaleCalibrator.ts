@@ -27,17 +27,17 @@ export function autoDetectScaleFromPlanData(
   lines: RawVectorLine[],
   texts: RawTextItem[]
 ): { pixelsPerCm: number; confidence: string } {
+  // 1. Check dimension numbers (e.g. "4.00", "4.000", "3.400", "18.400", "400") matched with nearby line length
   for (const item of texts) {
     const cleaned = item.text.trim().replace(/,/g, '');
-    // Match meters like "4.00", "3.50m", or millimeters/centimeters like "4000", "400"
-    const match = cleaned.match(/^(\d+(?:\.\d+)?)\s*(m|cm|mm)?$/i);
+    const match = cleaned.match(/^(\d+(?:\.\d{1,3})?)\s*(m|cm|mm|ม\.?)?$/i);
     if (!match) continue;
 
     const rawVal = parseFloat(match[1]);
     const unit = (match[2] || '').toLowerCase();
     let lengthCm = 0;
 
-    if (unit === 'm' || (cleaned.includes('.') && rawVal >= 1 && rawVal <= 20)) {
+    if (unit === 'm' || unit.startsWith('ม') || (cleaned.includes('.') && rawVal >= 0.8 && rawVal <= 35)) {
       lengthCm = rawVal * 100;
     } else if (unit === 'mm' || rawVal >= 1000) {
       lengthCm = rawVal / 10;
@@ -45,7 +45,7 @@ export function autoDetectScaleFromPlanData(
       lengthCm = rawVal;
     }
 
-    if (lengthCm < 50) continue;
+    if (lengthCm < 80) continue;
 
     // Find nearest horizontal or vertical line of plausible pixel length
     let bestLine: RawVectorLine | null = null;
@@ -57,7 +57,7 @@ export function autoDetectScaleFromPlanData(
       const midX = (line.x1 + line.x2) / 2;
       const midY = (line.y1 + line.y2) / 2;
       const dist = Math.hypot(item.x - midX, item.y - midY);
-      if (dist < 120 && dist < bestDist) {
+      if (dist < 130 && dist < bestDist) {
         bestDist = dist;
         bestLine = line;
       }
@@ -66,10 +66,27 @@ export function autoDetectScaleFromPlanData(
     if (bestLine) {
       const pxLen = Math.hypot(bestLine.x2 - bestLine.x1, bestLine.y2 - bestLine.y1);
       const scale = Number((pxLen / lengthCm).toFixed(4));
-      if (scale >= 0.1 && scale <= 10) {
+      if (scale >= 0.25 && scale <= 10) {
         return {
           pixelsPerCm: scale,
-          confidence: `ตรวจพบเส้นบอกระยะ ${item.text} (${lengthCm} ซม.) อัตโนมัติ`,
+          confidence: `ตรวจพบเส้นบอกระยะ ${item.text} (${Math.round(lengthCm)} ซม.) อัตโนมัติ`,
+        };
+      }
+    }
+  }
+
+  // 2. Check Title Block Scale text (e.g. "1 : 75", "1:100", "1:50")
+  // At 72 DPI * 1.5 viewport scale = 108 DPI -> 1 cm on paper = 108 / 2.54 = 42.5197 px on screen
+  for (const item of texts) {
+    const scaleMatch = item.text.trim().match(/^1\s*:\s*(\d{2,3})$/);
+    if (scaleMatch) {
+      const ratio = parseInt(scaleMatch[1], 10);
+      if (ratio >= 20 && ratio <= 500) {
+        const pxPerCmOnPaper = (72 * 1.5) / 2.54; // 42.5197 px per paper cm
+        const realPxPerCm = Number((pxPerCmOnPaper / ratio).toFixed(4));
+        return {
+          pixelsPerCm: realPxPerCm,
+          confidence: `อ่านจากมาตราส่วนในแบบ 1:${ratio} (${realPxPerCm.toFixed(2)} px/ซม.)`,
         };
       }
     }

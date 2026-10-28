@@ -200,13 +200,25 @@ export function applyAutoCornerExtensions(
       thicknessCm: FORMWORK_THICKNESS_CM,
       leftSide: {
         ...beam.leftSide,
-        startExtensionCm: leftStartExt,
-        endExtensionCm: leftEndExt,
+        startExtensionCm:
+          beam.edgeRole === 'inner'
+            ? 0
+            : Math.max(beam.leftSide.startExtensionCm || 0, leftStartExt),
+        endExtensionCm:
+          beam.edgeRole === 'inner'
+            ? 0
+            : Math.max(beam.leftSide.endExtensionCm || 0, leftEndExt),
       },
       rightSide: {
         ...beam.rightSide,
-        startExtensionCm: rightStartExt,
-        endExtensionCm: rightEndExt,
+        startExtensionCm:
+          beam.edgeRole === 'inner'
+            ? 0
+            : Math.max(beam.rightSide.startExtensionCm || 0, rightStartExt),
+        endExtensionCm:
+          beam.edgeRole === 'inner'
+            ? 0
+            : Math.max(beam.rightSide.endExtensionCm || 0, rightEndExt),
       },
     };
   });
@@ -223,6 +235,8 @@ export function computeAllBeamPanels(
 
     for (const sideKey of ['leftSide', 'rightSide'] as const) {
       const sideCfg = beam[sideKey];
+      if (sideCfg.enabled === false) continue;
+
       if (sideCfg.customPanels && sideCfg.customPanels.length > 0) {
         let offset = 0;
         for (const cp of sideCfg.customPanels) {

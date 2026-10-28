@@ -157,6 +157,15 @@ export function getSkuTheme(
   );
 }
 
+export const DEFAULT_BEAM_WIDTH_CM = 20 as const;
+
+export type DrawingToolMode =
+  | 'select'
+  | 'draw_inner_line'
+  | 'draw_outer_line'
+  | 'draw_inner_box'
+  | 'draw_outer_box';
+
 export interface PlacedPanel {
   id: string;
   beamId: string;
@@ -172,6 +181,7 @@ export interface PlacedPanel {
 
 export interface BeamSideConfig {
   side: 'left' | 'right';
+  enabled?: boolean; // defaults to true; when false, this side generates 0 panels
   heightCm: FormworkHeight;
   startExtensionCm: number; // +5 cm when wrapping outer corner, or 0
   endExtensionCm: number;   // +5 cm when wrapping outer corner, or 0
@@ -183,9 +193,15 @@ export interface BeamElement {
   name: string;
   start: Point;
   end: Point;
-  widthCm: number;
+  widthCm: number; // defaults to 20 cm
   defaultHeightCm: FormworkHeight;
   thicknessCm: 5;
+  /**
+   * 'single_edge': start->end is the exact beam edge line on the plan (1 line = 1 formwork strip attached directly to the line).
+   * 'dual_beam': start->end is the beam centerline with left/right edges offset by widthCm / 2.
+   */
+  attachMode?: 'single_edge' | 'dual_beam';
+  edgeRole?: 'inner' | 'outer';
   leftSide: BeamSideConfig;
   rightSide: BeamSideConfig;
 }

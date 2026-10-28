@@ -9,8 +9,12 @@ import {
   autoDetectBeamsFromVectorLines,
   autoDetectBeamsWithDiagnostics,
   classifyPlanLines,
+  createEdgesFromLineTool,
+  createEdgesFromBoxTool,
+  inferBeamHeightFromNearbyTexts,
   generateSampleBeamPlan,
 } from '../beamDetector';
+import { computeAllBeamPanels } from '../formworkOptimizer';
 
 describe('scaleCalibrator & beamDetector', () => {
   it('calculates exact pixelsPerCm from two calibration points and distance in cm', () => {
@@ -138,7 +142,74 @@ describe('scaleCalibrator & beamDetector', () => {
     const sample = generateSampleBeamPlan();
     expect(sample.beams.length).toBeGreaterThanOrEqual(6);
     expect(sample.beams.every((b) => b.thicknessCm === 5)).toBe(true);
+    expect(sample.beams.every((b) => b.widthCm === 20)).toBe(true);
     const heights = new Set(sample.beams.map((b) => b.defaultHeightCm));
     expect(heights.size).toBeGreaterThanOrEqual(2);
   });
+
+  it('creates single-edge formwork strips for inner and outer perimeter lines and boxes with 20cm beam width offset', () => {
+    // 1. Inner line tool (300 cm inner length at 1 px/cm) with auto-parallel 20cm pair
+    const innerPair = createEdgesFromLineTool(
+      'B1',
+      { x: 100, y: 100 },
+      { x: 400, y: 100 },
+      'inner',
+      50,
+      1.0,
+      20,
+      true
+    );
+    expect(innerPair.length).toBe(2);
+    expect(innerPair[0].attachMode).toBe('single_edge');
+    expect(innerPair[0].edgeRole).toBe('inner');
+    expect(Math.hypot(innerPair[0].end.x - innerPair[0].start.x, innerPair[0].end.y - innerPair[0].start.y)).toBeCloseTo(300, 1);
+    // Outer paired line is offset by 20cm and extended by 20cm at both ends (340 cm + 5cm corner wrap on each end)
+    expect(innerPair[1].edgeRole).toBe('outer');
+    expect(Math.hypot(innerPair[1].end.x - innerPair[1].start.x, innerPair[1].end.y - innerPair[1].start.y)).toBeCloseTo(340, 1);
+    expect(innerPair[1].leftSide.startExtensionCm).toBe(5);
+    expect(innerPair[1].leftSide.endExtensionCm).toBe(5);
+
+    const panels = computeAllBeamPanels(innerPair, 1.0);
+    // Only 1 enabled side per single-edge element -> 2 sides total
+    expect(panels.length).toBeGreaterThan(0);
+
+    // 2. Inner box tool around 400x300 cm slab opening
+    const boxEdges = createEdgesFromBoxTool(
+      'S1',
+      { x: 200, y: 200 },
+      { x: 600, y: 500 },
+      'inner',
+      50,
+      1.0,
+      20,
+      true
+    );
+    // 4 inner edges + 4 outer edges = 8 single-edge strips
+    expect(boxEdges.length).toBe(8);
+    expect(boxEdges.filter((e) => e.edgeRole === 'inner').length).toBe(4);
+    expect(boxEdges.filter((e) => e.edgeRole === 'outer').length).toBe(4);
+  });
+
+  it('supports SPW-FORCON-ST-261022-01 patterns: 3-decimal dimensions (4.000), 1:75 scale, and T/B elevation beam height inference', () => {
+    const lines: RawVectorLine[] = [{ x1: 100, y1: 50, x2: 500, y2: 50 }]; // 400 px
+    const texts: RawTextItem[] = [
+      { text: '4.000', x: 300, y: 45 },
+      { text: '1 : 75', x: 900, y: 800 },
+      { text: 'B1 T = +0.65', x: 300, y: 195 },
+      { text: 'B = +0.15', x: 300, y: 215 },
+    ];
+    const scaleRes = autoDetectScaleFromPlanData(lines, texts);
+    expect(scaleRes.pixelsPerCm).toBeCloseTo(1.0, 2);
+
+    const inferredHeight = inferBeamHeightFromNearbyTexts(
+      300,
+      200,
+      texts,
+      60
+    );
+    // |0.65 - 0.15| = 0.50m = 50cm
+    expect(inferredHeight).toBe(50);
+  });
 });
+
+

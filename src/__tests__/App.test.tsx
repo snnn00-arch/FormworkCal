@@ -16,18 +16,20 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
     expect(screen.getByText(/สแกนตรวจจับคาน \(Auto\)/i)).toBeInTheDocument();
   });
 
-  it('allows switching tool to draw beam, creating a beam on canvas, and editing its formwork height', () => {
+  it('allows switching tool to draw inner/outer perimeter lines and boxes, and editing formwork height', () => {
     const { container } = render(<App />);
 
-    // Switch to Draw Beam tool
-    const drawToolBtn = screen.getByRole('button', { name: /วาดคาน/i });
-    fireEvent.click(drawToolBtn);
+    // Verify 20cm default beam width input exists
+    expect(screen.getByDisplayValue('20')).toBeInTheDocument();
+
+    // Switch to Draw Inner Perimeter Line tool
+    const drawInnerLineBtn = screen.getByRole('button', { name: /วาดคาน \(วงใน\)/i });
+    fireEvent.click(drawInnerLineBtn);
 
     const canvas = container.querySelector('canvas')!;
 
-    // Click start point (100, 100)
+    // Click start point (100, 100) and end point (400, 100) -> creates inner + outer parallel lines (20cm offset)
     fireEvent.mouseDown(canvas, { clientX: 100, clientY: 100 });
-    // Click end point (400, 100) -> creates 300px beam
     fireEvent.mouseDown(canvas, { clientX: 400, clientY: 100 });
 
     // Open edit tab
@@ -35,6 +37,7 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
     fireEvent.click(editTabBtn);
 
     expect(screen.getByText(/แก้ไขคานและแผ่นไม้แบบ: B1/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /สลับฝั่งเกาะ \(Flip\)/i })).toBeInTheDocument();
 
     // Change height to 40 cm
     const height40Btn = screen.getByTitle('ตั้งความสูงทั้งสองฝั่ง 40 ซม.');
@@ -43,3 +46,4 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
     expect(screen.getAllByText(/40 ซม./i).length).toBeGreaterThan(1);
   });
 });
+

@@ -63,7 +63,7 @@ export function extractLinesFromImageData(
   const imgData = ctx.getImageData(0, 0, width, height);
   const data = imgData.data;
 
-  // Check if pixel is part of a dark/colored drawing stroke against the white PDF background
+  // Check if pixel is part of a dark drawing stroke against the white PDF background or light gray slab fill (S1-S4)
   const isStrokePixel = (x: number, y: number): boolean => {
     if (x < 0 || x >= width || y < 0 || y >= height) return false;
     const idx = (y * width + x) * 4;
@@ -73,7 +73,8 @@ export function extractLinesFromImageData(
     const a = data[idx + 3];
     if (a < 80) return false;
     const lum = (r + g + b) / 3;
-    return lum < 215;
+    // Slab fills in SPW-FORCON-ST-261022-01 have lum ~ 180-225; true beam/grid strokes have lum < 150
+    return lum < 150;
   };
 
   // Ignore outer 4% page border margin

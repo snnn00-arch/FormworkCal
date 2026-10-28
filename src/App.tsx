@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useRef } from 'react';
 import {
   BeamElement,
+  DEFAULT_BEAM_WIDTH_CM,
+  DrawingToolMode,
   FormworkHeight,
   Point,
 } from './types/formwork';
@@ -17,7 +19,8 @@ import {
 } from './engine/scaleCalibrator';
 import {
   autoDetectBeamsWithDiagnostics,
-  createBeamElement,
+  createEdgesFromBoxTool,
+  createEdgesFromLineTool,
 } from './engine/beamDetector';
 import {
   downloadCsvFile,
@@ -46,7 +49,9 @@ export const App: React.FC = () => {
   const [scaleMode, setScaleMode] = useState<'none' | 'manual_p1' | 'manual_p2'>('none');
 
   const [defaultHeight, setDefaultHeight] = useState<FormworkHeight>(60);
-  const [activeTool, setActiveTool] = useState<'select' | 'draw_beam'>('select');
+  const [defaultBeamWidthCm, setDefaultBeamWidthCm] = useState<number>(DEFAULT_BEAM_WIDTH_CM);
+  const [autoParallelPair, setAutoParallelPair] = useState<boolean>(true);
+  const [activeTool, setActiveTool] = useState<DrawingToolMode>('select');
   const [selectedBeamId, setSelectedBeamId] = useState<string | null>(null);
 
   // Compute Placed Panels and Rental Summary
@@ -73,7 +78,7 @@ export const App: React.FC = () => {
       setPixelsPerCm(scaleResult.pixelsPerCm);
       setScaleNote(scaleResult.confidence);
 
-      // 2. Auto line classification + Grid-Referenced Beam Detection
+      // 2. Auto line classification + Grid-Referenced Beam Line Detection
       if (loaded.vectorLines.length > 0) {
         const diag = autoDetectBeamsWithDiagnostics(
           loaded.vectorLines,
@@ -87,14 +92,14 @@ export const App: React.FC = () => {
           setBeams(withCorners);
           setSelectedBeamId(withCorners[0]?.id || null);
           alert(
-            `นำเข้า PDF สำเร็จ!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- ตัดเส้นกรอบกระดาษ/ตาราง: ${diag.counts.borderOrTitleBlock} เส้น\n- ตรวจพบแกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- สร้างคานจำลองทับตำแหน่งคานจริง: ${diag.beams.length} คาน (อ้างอิงตามแนวกริด/ตัดเส้นกริด ${diag.counts.gridGuidedBeams} คาน)`
+            `นำเข้า PDF สำเร็จ!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- ตัดเส้นกรอบกระดาษ/ตาราง: ${diag.counts.borderOrTitleBlock} เส้น\n- ตรวจพบแกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- รับรู้เส้นขอบและนำไม้แบบไปเกาะตามเส้น: ${diag.beams.length} ช่วง (ความกว้างคานเริ่มต้น 20 ซม.)`
           );
           return;
         }
       }
 
       alert(
-        `นำเข้า PDF สำเร็จ!\n- ตั้งสเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม.\n- คุณสามารถกดปุ่ม "สแกนตรวจจับคาน (Auto)" หรือคลิกปุ่ม "วาดคาน" เพื่อสร้างแนวคานบนแปลนได้ทันทีครับ`
+        `นำเข้า PDF สำเร็จ!\n- ตั้งสเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม.\n- คุณสามารถกดปุ่ม "สแกนตรวจจับคาน (Auto)" หรือเลือกเครื่องมือ "วาดคาน (วงใน)" / "วาดคาน (วงนอก)" เพื่อเกาะไม้แบบตามเส้นได้ทันทีครับ`
       );
     } catch (err) {
       console.error('Failed to load PDF:', err);
@@ -116,7 +121,7 @@ export const App: React.FC = () => {
     );
     if (diag.beams.length === 0) {
       alert(
-        `สแกนจำแนกเส้นเสร็จสิ้น:\n- ตัดกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- พบแกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- ไม่พบคู่เส้นขนานของคานที่ชัดเจน คุณสามารถใช้ปุ่ม "วาดคาน" คลิกสร้างแนวคานบนแปลนได้ทันทีครับ`
+        `สแกนจำแนกเส้นเสร็จสิ้น:\n- ตัดกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- พบแกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- ไม่พบคู่เส้นขนานของคานที่ชัดเจน คุณสามารถใช้ปุ่ม "วาดคาน (วงใน)" หรือ "วาดคาน (วงนอก)" คลิกเกาะไม้แบบตามเส้นบนแปลนได้ทันทีครับ`
       );
       return;
     }
@@ -124,10 +129,9 @@ export const App: React.FC = () => {
     setBeams(withCorners);
     setSelectedBeamId(withCorners[0]?.id || null);
     alert(
-      `สแกนและอ้างอิงเส้นกริดสำเร็จ!\n- ตัดเส้นกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- ใช้แกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- สร้างคานจำลองทับตำแหน่งคานจริง: ${diag.beams.length} คาน (อ้างอิงบนกริด/ตัดผ่านกริด ${diag.counts.gridGuidedBeams} คาน) พร้อมจัดเรียงไม้แบบหนา 5 ซม.`
+      `สแกนรับรู้เส้นและเกาะไม้แบบสำเร็จ!\n- ตัดเส้นกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- ใช้แกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- เกาะไม้แบบตามเส้นคานจริง: ${diag.beams.length} ช่วง (กว้างมาตรฐาน 20 ซม., ไม้แบบหนา 5 ซม.)`
     );
   };
-
 
   const handleRunAutoScale = () => {
     const scaleResult = autoDetectScaleFromPlanData(vectorLines, planTexts);
@@ -155,18 +159,71 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleAddBeam = (start: Point, end: Point) => {
-    const newName = `B${beams.length + 1}`;
-    const newBeam = createBeamElement(newName, start, end, defaultHeight, 20);
-    const updated = applyAutoCornerExtensions([...beams, newBeam], pixelsPerCm);
-    setBeams(updated);
-    setSelectedBeamId(newBeam.id);
-    setActiveTool('select');
+  const handleAddBeam = (
+    start: Point,
+    end: Point,
+    toolMode: DrawingToolMode | 'draw_beam' = activeTool
+  ) => {
+    const nextIdx = beams.length + 1;
+    let createdEdges: BeamElement[] = [];
+
+    if (toolMode === 'draw_inner_box') {
+      createdEdges = createEdgesFromBoxTool(
+        `S${nextIdx}`,
+        start,
+        end,
+        'inner',
+        defaultHeight,
+        pixelsPerCm,
+        defaultBeamWidthCm,
+        autoParallelPair
+      );
+    } else if (toolMode === 'draw_outer_box') {
+      createdEdges = createEdgesFromBoxTool(
+        `S${nextIdx}`,
+        start,
+        end,
+        'outer',
+        defaultHeight,
+        pixelsPerCm,
+        defaultBeamWidthCm,
+        autoParallelPair
+      );
+    } else if (toolMode === 'draw_outer_line') {
+      createdEdges = createEdgesFromLineTool(
+        `B${nextIdx}`,
+        start,
+        end,
+        'outer',
+        defaultHeight,
+        pixelsPerCm,
+        defaultBeamWidthCm,
+        autoParallelPair
+      );
+    } else {
+      // 'draw_inner_line' or legacy 'draw_beam'
+      createdEdges = createEdgesFromLineTool(
+        `B${nextIdx}`,
+        start,
+        end,
+        'inner',
+        defaultHeight,
+        pixelsPerCm,
+        defaultBeamWidthCm,
+        autoParallelPair
+      );
+    }
+
+    if (createdEdges.length > 0) {
+      const updated = applyAutoCornerExtensions([...beams, ...createdEdges], pixelsPerCm);
+      setBeams(updated);
+      setSelectedBeamId(createdEdges[0].id);
+      setActiveTool('select');
+    }
   };
 
   const handleAutoPlaceFormwork = () => {
     const optimized = applyAutoCornerExtensions(beams, pixelsPerCm);
-    // Clear custom panels so everything re-optimizes cleanly
     const freshOptimized = optimized.map((b) => ({
       ...b,
       leftSide: { ...b.leftSide, customPanels: undefined },
@@ -222,6 +279,10 @@ export const App: React.FC = () => {
         scaleNote={scaleNote}
         defaultHeight={defaultHeight}
         onChangeDefaultHeight={setDefaultHeight}
+        defaultBeamWidthCm={defaultBeamWidthCm}
+        onChangeDefaultBeamWidthCm={setDefaultBeamWidthCm}
+        autoParallelPair={autoParallelPair}
+        onChangeAutoParallelPair={setAutoParallelPair}
         activeTool={activeTool}
         onChangeActiveTool={setActiveTool}
         onAutoPlaceFormwork={handleAutoPlaceFormwork}

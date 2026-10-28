@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import {
   BeamElement,
+  DrawingToolMode,
   FORMWORK_THICKNESS_CM,
   PlacedPanel,
   Point,
@@ -15,8 +16,8 @@ interface PlanCanvasProps {
   pixelsPerCm: number;
   selectedBeamId: string | null;
   onSelectBeam: (beamId: string | null) => void;
-  activeTool: 'select' | 'draw_beam';
-  onAddBeam: (start: Point, end: Point) => void;
+  activeTool: DrawingToolMode | 'draw_beam';
+  onAddBeam: (start: Point, end: Point, toolMode?: DrawingToolMode | 'draw_beam') => void;
   scaleMode: 'none' | 'manual_p1' | 'manual_p2';
   onCalibrationPointsSelected: (p1: Point, p2: Point) => void;
 }
@@ -40,7 +41,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState<Point>({ x: 0, y: 0 });
 
-  // Drawing beam state
+  // Drawing line / box state
   const [drawStart, setDrawStart] = useState<Point | null>(null);
   const [currentMousePos, setCurrentMousePos] = useState<Point | null>(null);
 
@@ -132,7 +133,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       ctx.drawImage(pdfImage, 0, 0);
     }
 
-    // 3. Draw Beams (translucent overlay directly on top of PDF plan)
+    // 3. Draw ONLY Recognized Edge Lines (NO solid beam block covering the PDF plan!)
     for (const beam of beams) {
       const isSelected = beam.id === selectedBeamId;
       const bDx = beam.end.x - beam.start.x;
@@ -143,43 +144,51 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       const nx = -uy;
       const ny = ux;
 
-      const halfW = (beam.widthCm * pixelsPerCm) / 2;
+      if (beam.attachMode === 'single_edge') {
+        // Draw crisp reference edge line directly where formwork attaches
+        ctx.strokeStyle = isSelected
+          ? '#2563EB'
+          : beam.edgeRole === 'outer'
+          ? '#0284C7'
+          : '#4F46E5';
+        ctx.lineWidth = (isSelected ? 2.5 : 1.5) / zoom;
+        ctx.beginPath();
+        ctx.moveTo(beam.start.x, beam.start.y);
+        ctx.lineTo(beam.end.x, beam.end.y);
+        ctx.stroke();
+      } else {
+        // For dual_beam mode: draw only the two crisp edge lines (no filled beam rectangle!)
+        const halfW = (beam.widthCm * pixelsPerCm) / 2;
+        ctx.strokeStyle = isSelected ? '#2563EB' : '#475569';
+        ctx.lineWidth = (isSelected ? 2.2 : 1.3) / zoom;
 
-      // Translucent Beam Body so underlying PDF beam lines remain visible
-      ctx.fillStyle = isSelected ? 'rgba(59, 130, 246, 0.22)' : 'rgba(148, 163, 184, 0.16)';
-      ctx.strokeStyle = isSelected ? '#2563EB' : '#64748B';
-      ctx.lineWidth = (isSelected ? 2 : 1) / zoom;
+        if (beam.leftSide.enabled !== false) {
+          ctx.beginPath();
+          ctx.moveTo(beam.start.x + nx * halfW, beam.start.y + ny * halfW);
+          ctx.lineTo(beam.end.x + nx * halfW, beam.end.y + ny * halfW);
+          ctx.stroke();
+        }
+        if (beam.rightSide.enabled !== false) {
+          ctx.beginPath();
+          ctx.moveTo(beam.start.x - nx * halfW, beam.start.y - ny * halfW);
+          ctx.lineTo(beam.end.x - nx * halfW, beam.end.y - ny * halfW);
+          ctx.stroke();
+        }
+      }
 
-      ctx.beginPath();
-      ctx.moveTo(beam.start.x + nx * halfW, beam.start.y + ny * halfW);
-      ctx.lineTo(beam.end.x + nx * halfW, beam.end.y + ny * halfW);
-      ctx.lineTo(beam.end.x - nx * halfW, beam.end.y - ny * halfW);
-      ctx.lineTo(beam.start.x - nx * halfW, beam.start.y - ny * halfW);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-
-      // Beam Centerline
-      ctx.strokeStyle = isSelected ? '#3B82F6' : '#94A3B8';
-      ctx.lineWidth = 1 / zoom;
-      ctx.setLineDash([4 / zoom, 4 / zoom]);
-      ctx.beginPath();
-      ctx.moveTo(beam.start.x, beam.start.y);
-      ctx.lineTo(beam.end.x, beam.end.y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Beam Label
+      // Small unobtrusive label pill when selected or zoomed in
       const midX = (beam.start.x + beam.end.x) / 2;
       const midY = (beam.start.y + beam.end.y) / 2;
-      ctx.fillStyle = isSelected ? '#1D4ED8' : '#0F172A';
-      ctx.font = `600 ${Math.max(10, 11 / zoom)}px "Plus Jakarta Sans", sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(beam.name, midX, midY);
+      if (isSelected || bLen * zoom > 65) {
+        ctx.fillStyle = isSelected ? '#1D4ED8' : '#0F172A';
+        ctx.font = `600 ${Math.max(9, 10 / zoom)}px "Plus Jakarta Sans", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(beam.name, midX, midY);
+      }
     }
 
-    // 4. Draw Formwork Panels with Fixed 5cm Thickness
+    // 4. Draw Formwork Panels Attached Directly to Edge Lines (Fixed 5cm Thickness)
     const thicknessPx = FORMWORK_THICKNESS_CM * pixelsPerCm;
 
     for (const panel of panels) {
@@ -194,18 +203,23 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       const nx = -uy;
       const ny = ux;
 
-      const halfW = (parentBeam.widthCm * pixelsPerCm) / 2;
+      // In single_edge mode, the formwork attaches directly on the line itself (halfW = 0)!
+      const isSingleEdge = parentBeam.attachMode === 'single_edge';
+      const halfW = isSingleEdge ? 0 : (parentBeam.widthCm * pixelsPerCm) / 2;
       const sign = panel.side === 'left' ? 1 : -1;
 
-      // Start point on beam edge
-      const sideStartX = parentBeam.start.x + sign * nx * halfW;
-      const sideStartY = parentBeam.start.y + sign * ny * halfW;
+      const sideCfg = panel.side === 'left' ? parentBeam.leftSide : parentBeam.rightSide;
+      const startExtPx = (sideCfg.startExtensionCm || 0) * pixelsPerCm;
+
+      // Start point on the edge line (shifted back by startExtensionCm if outer corner wraps)
+      const sideStartX = parentBeam.start.x + sign * nx * halfW - ux * startExtPx;
+      const sideStartY = parentBeam.start.y + sign * ny * halfW - uy * startExtPx;
 
       // Panel length in pixels
       const panelLenPx = panel.lengthCm * pixelsPerCm;
       const offsetPx = panel.offsetStartCm * pixelsPerCm;
 
-      // 4 corners of panel
+      // 4 corners of panel attached to the line and protruding 5cm outward
       const p1x = sideStartX + ux * offsetPx;
       const p1y = sideStartY + uy * offsetPx;
 
@@ -236,7 +250,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       ctx.lineTo(p3x, p3y);
       ctx.lineTo(p4x, p4y);
       ctx.closePath();
-      ctx.globalAlpha = 0.85;
+      ctx.globalAlpha = 0.88;
       ctx.fill();
       ctx.globalAlpha = 1.0;
       ctx.stroke();
@@ -259,19 +273,32 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       }
     }
 
-    // 5. Draw Temporary Drawing Beam
-    if (activeTool === 'draw_beam' && drawStart && currentMousePos) {
-      ctx.strokeStyle = '#3B82F6';
+    // 5. Draw Temporary Drawing Line or Box Preview
+    const isDrawingTool = activeTool !== 'select';
+    if (isDrawingTool && drawStart && currentMousePos) {
+      const isBoxTool = activeTool === 'draw_inner_box' || activeTool === 'draw_outer_box';
+      const isOuter = activeTool === 'draw_outer_line' || activeTool === 'draw_outer_box';
+
+      ctx.strokeStyle = isOuter ? '#0284C7' : '#4F46E5';
       ctx.lineWidth = 2 / zoom;
       ctx.setLineDash([5 / zoom, 3 / zoom]);
-      ctx.beginPath();
-      ctx.moveTo(drawStart.x, drawStart.y);
-      ctx.lineTo(currentMousePos.x, currentMousePos.y);
-      ctx.stroke();
+
+      if (isBoxTool) {
+        const rx = Math.min(drawStart.x, currentMousePos.x);
+        const ry = Math.min(drawStart.y, currentMousePos.y);
+        const rw = Math.abs(currentMousePos.x - drawStart.x);
+        const rh = Math.abs(currentMousePos.y - drawStart.y);
+        ctx.strokeRect(rx, ry, rw, rh);
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(drawStart.x, drawStart.y);
+        ctx.lineTo(currentMousePos.x, currentMousePos.y);
+        ctx.stroke();
+      }
       ctx.setLineDash([]);
 
       // Point circle
-      ctx.fillStyle = '#3B82F6';
+      ctx.fillStyle = isOuter ? '#0284C7' : '#4F46E5';
       ctx.beginPath();
       ctx.arc(drawStart.x, drawStart.y, 4 / zoom, 0, Math.PI * 2);
       ctx.fill();
@@ -330,36 +357,37 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       return;
     }
 
-    // Draw Beam Tool
-    if (activeTool === 'draw_beam') {
+    // Draw Line or Box Tool (Inner / Outer Perimeter)
+    if (activeTool !== 'select') {
       if (!drawStart) {
         setDrawStart(world);
       } else {
-        if (Math.hypot(world.x - drawStart.x, world.y - drawStart.y) > 20) {
-          onAddBeam(drawStart, world);
+        if (Math.hypot(world.x - drawStart.x, world.y - drawStart.y) > 15) {
+          onAddBeam(drawStart, world, activeTool);
         }
         setDrawStart(null);
       }
       return;
     }
 
-    // Select Beam Tool
+    // Select Line/Beam Tool
     if (activeTool === 'select') {
-      // Find clicked beam
       let foundBeamId: string | null = null;
+      let bestDist = Infinity;
+
       for (const b of beams) {
         const dx = b.end.x - b.start.x;
         const dy = b.end.y - b.start.y;
         const len = Math.hypot(dx, dy) || 1;
         const u = ((world.x - b.start.x) * dx + (world.y - b.start.y) * dy) / (len * len);
-        if (u >= 0 && u <= 1) {
+        if (u >= -0.05 && u <= 1.05) {
           const projX = b.start.x + u * dx;
           const projY = b.start.y + u * dy;
           const dist = Math.hypot(world.x - projX, world.y - projY);
-          const threshold = ((b.widthCm + 15) * pixelsPerCm) / 2;
-          if (dist <= threshold) {
+          const threshold = Math.max(14 / zoom, ((b.widthCm + 16) * pixelsPerCm) / 2);
+          if (dist <= threshold && dist < bestDist) {
+            bestDist = dist;
             foundBeamId = b.id;
-            break;
           }
         }
       }
@@ -409,6 +437,32 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     });
     setZoom(newZoom);
   };
+
+  const getToolBannerText = (): string | null => {
+    switch (activeTool) {
+      case 'draw_inner_line':
+      case 'draw_beam':
+        return drawStart
+          ? 'คลิกจุดสิ้นสุดของเส้นขอบใน (ระบบจะเอาไม้แบบไปเกาะตามเส้นขอบใน)'
+          : 'วิธีที่ 1 (ลากเส้นวงใน): คลิกจุดเริ่มต้นบนเส้นขอบด้านในของคาน';
+      case 'draw_inner_box':
+        return drawStart
+          ? 'คลิกมุมตรงข้ามของช่องพื้นด้านใน เพื่อสร้างไม้แบบเกาะครบ 4 ด้านรอบวงใน'
+          : 'วิธีที่ 1 (ตีกรอบวงใน): คลิกมุมที่ 1 ของขอบด้านในช่องพื้น (เช่น S1-S4)';
+      case 'draw_outer_line':
+        return drawStart
+          ? 'คลิกจุดสิ้นสุดของเส้นขอบนอก (ระบบจะเอาไม้แบบไปเกาะตามเส้นขอบนอก + อมมุม 5 ซม.)'
+          : 'วิธีที่ 2 (ลากเส้นวงนอก): คลิกจุดเริ่มต้นบนเส้นขอบด้านนอกของคาน';
+      case 'draw_outer_box':
+        return drawStart
+          ? 'คลิกมุมตรงข้ามของขอบนอกคาน เพื่อสร้างไม้แบบเกาะครบ 4 ด้านรอบวงนอก'
+          : 'วิธีที่ 2 (ตีกรอบวงนอก): คลิกมุมที่ 1 ของเส้นขอบด้านนอกคาน';
+      default:
+        return null;
+    }
+  };
+
+  const bannerText = getToolBannerText();
 
   return (
     <div
@@ -466,11 +520,9 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         </div>
       )}
 
-      {activeTool === 'draw_beam' && (
+      {bannerText && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-4 py-1.5 rounded-full text-xs font-semibold shadow-md flex items-center gap-2">
-          <span>
-            {drawStart ? 'คลิกจุดสิ้นสุดของคาน' : 'คลิกจุดเริ่มต้นเพื่อวาดแนวคานใหม่'}
-          </span>
+          <span>{bannerText}</span>
         </div>
       )}
 
@@ -482,10 +534,10 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
               <Upload className="w-6 h-6" />
             </div>
             <h3 className="text-sm font-bold text-slate-800 mb-1">
-              เริ่มต้นคำนวณไม้แบบ
+              เริ่มต้นคำนวณไม้แบบ (เกาะตามเส้นแปลน)
             </h3>
             <p className="text-xs text-slate-500 leading-relaxed">
-              กดปุ่ม <span className="font-semibold text-blue-600">"นำเข้า PDF แปลนคาน"</span> ด้านบน ระบบจะอ่านสเกลและตรวจจับแนวคานพร้อมจัดเรียงไม้แบบให้อัตโนมัติทันที
+              กดปุ่ม <span className="font-semibold text-blue-600">"นำเข้า PDF แปลนคาน"</span> ด้านบน ระบบจะอ่านสเกล รับรู้เส้นขอบคาน และนำไม้แบบไปเกาะตามเส้นให้อัตโนมัติ หรือเลือกวาดจาก <span className="font-semibold text-indigo-600">วงรอบใน</span> / <span className="font-semibold text-sky-600">วงรอบนอก</span> ได้ทันที
             </p>
           </div>
         </div>

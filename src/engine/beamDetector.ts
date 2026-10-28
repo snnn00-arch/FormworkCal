@@ -1,5 +1,7 @@
 import {
   BeamElement,
+  DEFAULT_BEAM_WIDTH_CM,
+  FORMWORK_HEIGHTS,
   FORMWORK_THICKNESS_CM,
   FormworkHeight,
   Point,
@@ -55,7 +57,7 @@ export function createBeamElement(
   start: Point,
   end: Point,
   heightCm: FormworkHeight = 60,
-  widthCm = 20
+  widthCm: number = DEFAULT_BEAM_WIDTH_CM
 ): BeamElement {
   const id = `beam-${Date.now()}-${beamCounter++}`;
   return {
@@ -66,14 +68,17 @@ export function createBeamElement(
     widthCm,
     defaultHeightCm: heightCm,
     thicknessCm: FORMWORK_THICKNESS_CM,
+    attachMode: 'dual_beam',
     leftSide: {
       side: 'left',
+      enabled: true,
       heightCm,
       startExtensionCm: 0,
       endExtensionCm: 0,
     },
     rightSide: {
       side: 'right',
+      enabled: true,
       heightCm,
       startExtensionCm: 0,
       endExtensionCm: 0,
@@ -81,14 +86,391 @@ export function createBeamElement(
   };
 }
 
+/**
+ * Creates a single-edge Formwork Line Element where 1 line = 1 formwork strip attached directly to the line.
+ */
+export function createFormworkEdgeElement(
+  name: string,
+  start: Point,
+  end: Point,
+  activeSide: 'left' | 'right' = 'left',
+  heightCm: FormworkHeight = 60,
+  edgeRole: 'inner' | 'outer' = 'inner',
+  widthCm: number = DEFAULT_BEAM_WIDTH_CM,
+  startExtensionCm = 0,
+  endExtensionCm = 0
+): BeamElement {
+  const id = `edge-${Date.now()}-${beamCounter++}`;
+  return {
+    id,
+    name,
+    start,
+    end,
+    widthCm,
+    defaultHeightCm: heightCm,
+    thicknessCm: FORMWORK_THICKNESS_CM,
+    attachMode: 'single_edge',
+    edgeRole,
+    leftSide: {
+      side: 'left',
+      enabled: activeSide === 'left',
+      heightCm,
+      startExtensionCm: activeSide === 'left' ? startExtensionCm : 0,
+      endExtensionCm: activeSide === 'left' ? endExtensionCm : 0,
+    },
+    rightSide: {
+      side: 'right',
+      enabled: activeSide === 'right',
+      heightCm,
+      startExtensionCm: activeSide === 'right' ? startExtensionCm : 0,
+      endExtensionCm: activeSide === 'right' ? endExtensionCm : 0,
+    },
+  };
+}
+
+/**
+ * Creates 1 or 2 Formwork Edge Lines from a user-drawn line (Inner Perimeter or Outer Perimeter).
+ * - Snaps nearly-horizontal or nearly-vertical lines to orthogonal.
+ * - If autoParallelPair is true, also creates the opposite parallel edge offset by beamWidthCm (default 20 cm).
+ */
+export function createEdgesFromLineTool(
+  baseName: string,
+  rawStart: Point,
+  rawEnd: Point,
+  role: 'inner' | 'outer',
+  heightCm: FormworkHeight,
+  pixelsPerCm: number,
+  beamWidthCm: number = DEFAULT_BEAM_WIDTH_CM,
+  autoParallelPair = true
+): BeamElement[] {
+  const safeScale = pixelsPerCm > 0 ? pixelsPerCm : 1;
+  const dx = rawEnd.x - rawStart.x;
+  const dy = rawEnd.y - rawStart.y;
+
+  // Orthogonal snap if within 12 degrees
+  let start = { ...rawStart };
+  let end = { ...rawEnd };
+  if (Math.abs(dy) <= Math.abs(dx) * 0.22) {
+    end = { x: rawEnd.x, y: rawStart.y };
+  } else if (Math.abs(dx) <= Math.abs(dy) * 0.22) {
+    end = { x: rawStart.x, y: rawEnd.y };
+  }
+
+  const sDx = end.x - start.x;
+  const sDy = end.y - start.y;
+  const sLen = Math.hypot(sDx, sDy) || 1;
+  const ux = sDx / sLen;
+  const uy = sDy / sLen;
+  // Left normal (-uy, ux)
+  const nx = -uy;
+  const ny = ux;
+
+  const widthPx = beamWidthCm * safeScale;
+  const results: BeamElement[] = [];
+
+  if (role === 'inner') {
+    // Primary line is the Inner Edge: formwork strip protrudes toward 'right' (into the slab opening)
+    // and the beam concrete body sits on the 'left' side (+nx, +ny).
+    results.push(
+      createFormworkEdgeElement(
+        `${baseName} (ขอบใน)`,
+        start,
+        end,
+        'right',
+        heightCm,
+        'inner',
+        beamWidthCm,
+        0,
+        0
+      )
+    );
+
+    if (autoParallelPair) {
+      // Paired Outer Edge is offset by +beamWidthCm along (+nx, +ny) and extends by +beamWidthCm at both ends + 5cm formwork wrap
+      const extPx = widthPx;
+      const outerStart = {
+        x: start.x + nx * widthPx - ux * extPx,
+        y: start.y + ny * widthPx - uy * extPx,
+      };
+      const outerEnd = {
+        x: end.x + nx * widthPx + ux * extPx,
+        y: end.y + ny * widthPx + uy * extPx,
+      };
+      results.push(
+        createFormworkEdgeElement(
+          `${baseName} (ขอบนอก)`,
+          outerStart,
+          outerEnd,
+          'left',
+          heightCm,
+          'outer',
+          beamWidthCm,
+          FORMWORK_THICKNESS_CM,
+          FORMWORK_THICKNESS_CM
+        )
+      );
+    }
+  } else {
+    // Primary line is the Outer Edge: formwork strip protrudes toward 'left' (+nx, +ny, outside the beam)
+    // with +5cm formwork corner wrap.
+    results.push(
+      createFormworkEdgeElement(
+        `${baseName} (ขอบนอก)`,
+        start,
+        end,
+        'left',
+        heightCm,
+        'outer',
+        beamWidthCm,
+        FORMWORK_THICKNESS_CM,
+        FORMWORK_THICKNESS_CM
+      )
+    );
+
+    if (autoParallelPair) {
+      // Paired Inner Edge is inset by -beamWidthCm along (-nx, -ny) and shortened by -beamWidthCm at both ends
+      const shrinkPx = Math.min(widthPx, sLen * 0.35);
+      const innerStart = {
+        x: start.x - nx * widthPx + ux * shrinkPx,
+        y: start.y - ny * widthPx + uy * shrinkPx,
+      };
+      const innerEnd = {
+        x: end.x - nx * widthPx - ux * shrinkPx,
+        y: end.y - ny * widthPx - uy * shrinkPx,
+      };
+      results.push(
+        createFormworkEdgeElement(
+          `${baseName} (ขอบใน)`,
+          innerStart,
+          innerEnd,
+          'right',
+          heightCm,
+          'inner',
+          beamWidthCm,
+          0,
+          0
+        )
+      );
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Creates a 4-sided rectangular loop of Formwork Edge Lines from 2 corner clicks:
+ * - role === 'inner': User clicked the INNER slab opening rectangle (วงรอบใน).
+ *   Inner 4 edges have exact inner dimensions; if autoParallelPair is true, outer 4 edges are expanded by +beamWidthCm (20 cm) on all sides + 5 cm corner wrap.
+ * - role === 'outer': User clicked the OUTER building/bay perimeter rectangle (วงรอบนอก).
+ *   Outer 4 edges have exact outer dimensions + 5 cm corner wrap; if autoParallelPair is true, inner 4 edges are inset by -beamWidthCm (20 cm) on all sides.
+ */
+export function createEdgesFromBoxTool(
+  basePrefix: string,
+  p1: Point,
+  p2: Point,
+  role: 'inner' | 'outer',
+  heightCm: FormworkHeight,
+  pixelsPerCm: number,
+  beamWidthCm: number = DEFAULT_BEAM_WIDTH_CM,
+  autoParallelPair = true
+): BeamElement[] {
+  const safeScale = pixelsPerCm > 0 ? pixelsPerCm : 1;
+  const widthPx = beamWidthCm * safeScale;
+
+  const minX = Math.min(p1.x, p2.x);
+  const maxX = Math.max(p1.x, p2.x);
+  const minY = Math.min(p1.y, p2.y);
+  const maxY = Math.max(p1.y, p2.y);
+
+  const inMinX = role === 'inner' ? minX : minX + widthPx;
+  const inMaxX = role === 'inner' ? maxX : maxX - widthPx;
+  const inMinY = role === 'inner' ? minY : minY + widthPx;
+  const inMaxY = role === 'inner' ? maxY : maxY - widthPx;
+
+  const outMinX = role === 'inner' ? minX - widthPx : minX;
+  const outMaxX = role === 'inner' ? maxX + widthPx : maxX;
+  const outMinY = role === 'inner' ? minY - widthPx : minY;
+  const outMaxY = role === 'inner' ? maxY + widthPx : maxY;
+
+  const edges: BeamElement[] = [];
+
+  const addInnerLoop = () => {
+    if (inMaxX - inMinX < 15 || inMaxY - inMinY < 15) return;
+    // Clockwise loop: Top (left->right), Right (top->bottom), Bottom (right->left), Left (bottom->top)
+    // In screen coordinates (y down), 'right' normal of a clockwise loop points INWARD into the box!
+    edges.push(
+      createFormworkEdgeElement(
+        `${basePrefix}-บน(ใน)`,
+        { x: inMinX, y: inMinY },
+        { x: inMaxX, y: inMinY },
+        'right',
+        heightCm,
+        'inner',
+        beamWidthCm,
+        0,
+        0
+      ),
+      createFormworkEdgeElement(
+        `${basePrefix}-ขวา(ใน)`,
+        { x: inMaxX, y: inMinY },
+        { x: inMaxX, y: inMaxY },
+        'right',
+        heightCm,
+        'inner',
+        beamWidthCm,
+        0,
+        0
+      ),
+      createFormworkEdgeElement(
+        `${basePrefix}-ล่าง(ใน)`,
+        { x: inMaxX, y: inMaxY },
+        { x: inMinX, y: inMaxY },
+        'right',
+        heightCm,
+        'inner',
+        beamWidthCm,
+        0,
+        0
+      ),
+      createFormworkEdgeElement(
+        `${basePrefix}-ซ้าย(ใน)`,
+        { x: inMinX, y: inMaxY },
+        { x: inMinX, y: inMinY },
+        'right',
+        heightCm,
+        'inner',
+        beamWidthCm,
+        0,
+        0
+      )
+    );
+  };
+
+  const addOuterLoop = () => {
+    if (outMaxX - outMinX < 15 || outMaxY - outMinY < 15) return;
+    // Clockwise loop: 'left' normal points OUTWARD away from the box!
+    edges.push(
+      createFormworkEdgeElement(
+        `${basePrefix}-บน(นอก)`,
+        { x: outMinX, y: outMinY },
+        { x: outMaxX, y: outMinY },
+        'left',
+        heightCm,
+        'outer',
+        beamWidthCm,
+        FORMWORK_THICKNESS_CM,
+        FORMWORK_THICKNESS_CM
+      ),
+      createFormworkEdgeElement(
+        `${basePrefix}-ขวา(นอก)`,
+        { x: outMaxX, y: outMinY },
+        { x: outMaxX, y: outMaxY },
+        'left',
+        heightCm,
+        'outer',
+        beamWidthCm,
+        FORMWORK_THICKNESS_CM,
+        FORMWORK_THICKNESS_CM
+      ),
+      createFormworkEdgeElement(
+        `${basePrefix}-ล่าง(นอก)`,
+        { x: outMaxX, y: outMaxY },
+        { x: outMinX, y: outMaxY },
+        'left',
+        heightCm,
+        'outer',
+        beamWidthCm,
+        FORMWORK_THICKNESS_CM,
+        FORMWORK_THICKNESS_CM
+      ),
+      createFormworkEdgeElement(
+        `${basePrefix}-ซ้าย(นอก)`,
+        { x: outMinX, y: outMaxY },
+        { x: outMinX, y: outMinY },
+        'left',
+        heightCm,
+        'outer',
+        beamWidthCm,
+        FORMWORK_THICKNESS_CM,
+        FORMWORK_THICKNESS_CM
+      )
+    );
+  };
+
+  if (role === 'inner') {
+    addInnerLoop();
+    if (autoParallelPair) addOuterLoop();
+  } else {
+    addOuterLoop();
+    if (autoParallelPair) addInnerLoop();
+  }
+
+  return edges;
+}
+
 function isBeamTagText(text: string): boolean {
   const t = text.trim();
-  return /^(?:G?B|FB|RB|CB|WB|SB|PB|คาน)[-_\s]?\d+[A-Z0-9-]*$/i.test(t);
+  // Matches "B1", "B1A", "GB1", "FB1", or combined "B1AT = +0.55" / "B1 T = +0.65" from SPW-FORCON-ST-261022-01
+  return /^(?:G?B|FB|RB|CB|WB|SB|PB|คาน)[-_\s]?\d+[A-Z0-9-]*(?:\s*T\s*=.*)?$/i.test(t);
+}
+
+function normalizeBeamTagName(text: string): string {
+  const t = text.trim();
+  const m = t.match(/^((?:G?B|FB|RB|CB|WB|SB|PB|คาน)[-_\s]?\d+[A-Z0-9-]*?)(?:\s*T\s*=.*)?$/i);
+  return m ? m[1].trim() : t;
+}
+
+/**
+ * Infers beam formwork height (40, 50, 60, 70 cm) from nearby T = +0.65 / B = +0.15 elevation texts
+ * in SPW-FORCON-ST-261022-01.pdf (e.g., 0.65 - 0.15 = 0.50m = 50cm).
+ */
+export function inferBeamHeightFromNearbyTexts(
+  midX: number,
+  midY: number,
+  texts: RawTextItem[],
+  fallbackHeight: FormworkHeight
+): FormworkHeight {
+  let topElev: number | null = null;
+  let botElev: number | null = null;
+  let bestTopDist = 95;
+  let bestBotDist = 95;
+
+  for (const item of texts) {
+    const d = Math.hypot(item.x - midX, item.y - midY);
+    if (d > 95) continue;
+    const tMatch = item.text.match(/T\s*=\s*[+-]?(\d+\.\d{2})/i);
+    if (tMatch && d < bestTopDist) {
+      topElev = parseFloat(tMatch[1]);
+      bestTopDist = d;
+    }
+    const bMatch = item.text.match(/B\s*=\s*[+-]?(\d+\.\d{2})/i);
+    if (bMatch && d < bestBotDist) {
+      botElev = parseFloat(bMatch[1]);
+      bestBotDist = d;
+    }
+  }
+
+  if (topElev !== null && botElev !== null && topElev > botElev) {
+    const depthCm = Math.round((topElev - botElev) * 100);
+    // Snap to closest standard FormworkHeight: 40, 50, 60, 70
+    let closest: FormworkHeight = fallbackHeight;
+    let minDiff = Infinity;
+    for (const h of FORMWORK_HEIGHTS) {
+      const diff = Math.abs(h - depthCm);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closest = h;
+      }
+    }
+    if (minDiff <= 15) return closest;
+  }
+
+  return fallbackHeight;
 }
 
 function isDimensionText(text: string): boolean {
   const t = text.trim().replace(/,/g, '');
-  return /^\d+\.\d{2}\s*(?:m|ม\.?)?$/i.test(t) || /^(?:[1-9]\d{2,4})\s*(?:mm|cm)?$/i.test(t);
+  return /^\d+\.\d{2,3}\s*(?:m|ม\.?)?$/i.test(t) || /^(?:[1-9]\d{2,4})\s*(?:mm|cm)?$/i.test(t);
 }
 
 function isGridBubbleText(text: string): boolean {
@@ -120,7 +502,7 @@ function findNearestBeamLabel(
   orientation: 'horizontal' | 'vertical',
   texts: RawTextItem[],
   usedLabels: Set<number>,
-  maxOrthogonalDist = 38
+  maxOrthogonalDist = 42
 ): string | null {
   const midX = (start.x + end.x) / 2;
   const midY = (start.y + end.y) / 2;
@@ -167,7 +549,7 @@ function findNearestBeamLabel(
 
   if (bestIdx !== -1) {
     usedLabels.add(bestIdx);
-    return texts[bestIdx].text.trim();
+    return normalizeBeamTagName(texts[bestIdx].text);
   }
   return null;
 }
@@ -842,14 +1224,23 @@ export function autoDetectBeamsWithDiagnostics(
         usedLabelIndices
       );
       const beamName = detectedLabel || `B${indexCounter++}`;
-      const widthCm = Math.max(10, Math.round(bestGeom.gapPx / safeScale));
+      const midX = (bestGeom.start.x + bestGeom.end.x) / 2;
+      const midY = (bestGeom.start.y + bestGeom.end.y) / 2;
+      const inferredHeight = inferBeamHeightFromNearbyTexts(midX, midY, texts, defaultHeightCm);
 
       if (bestGeom.isGridGuided) {
         counts.gridGuidedBeams++;
       }
 
+      // Always default beam width to 20 cm (DEFAULT_BEAM_WIDTH_CM); user can edit manually if needed
       beams.push(
-        createBeamElement(beamName, bestGeom.start, bestGeom.end, defaultHeightCm, widthCm)
+        createBeamElement(
+          beamName,
+          bestGeom.start,
+          bestGeom.end,
+          inferredHeight,
+          DEFAULT_BEAM_WIDTH_CM
+        )
       );
     }
   }
@@ -874,8 +1265,6 @@ export function autoDetectBeamsWithDiagnostics(
 
     if (nearGrid) {
       const snapped = snapEndpointsToPerpGrids(c.start, c.end, c.orientation);
-      const halfWidthPx = Math.max(6, Math.abs(c.coord - nearGrid.coord));
-      const estGapPx = Math.min(maxWidthPx, Math.max(minWidthPx, halfWidthPx * 2));
       const beamCoord = nearGrid.coord;
 
       const startPt: Point =
@@ -897,10 +1286,14 @@ export function autoDetectBeamsWithDiagnostics(
           usedLabelIndices
         );
         const beamName = detectedLabel || `B${indexCounter++}`;
-        const widthCm = Math.max(15, Math.round(estGapPx / safeScale));
+        const midX = (startPt.x + endPt.x) / 2;
+        const midY = (startPt.y + endPt.y) / 2;
+        const inferredHeight = inferBeamHeightFromNearbyTexts(midX, midY, texts, defaultHeightCm);
 
         counts.gridGuidedBeams++;
-        beams.push(createBeamElement(beamName, startPt, endPt, defaultHeightCm, widthCm));
+        beams.push(
+          createBeamElement(beamName, startPt, endPt, inferredHeight, DEFAULT_BEAM_WIDTH_CM)
+        );
       }
     }
   }
@@ -914,6 +1307,7 @@ export function autoDetectBeamsWithDiagnostics(
     if (usedLabelIndices.has(tIdx)) continue;
     const txt = texts[tIdx];
     if (!isBeamTagText(txt.text)) continue;
+    const cleanTagName = normalizeBeamTagName(txt.text);
 
     // Find closest horizontal and vertical grid axes within 35px
     const nearHGrid = gridAxes.horizontal
@@ -940,7 +1334,12 @@ export function autoDetectBeamsWithDiagnostics(
         if (!isDuplicateBeam(startPt, endPt, 'horizontal')) {
           usedLabelIndices.add(tIdx);
           counts.gridGuidedBeams++;
-          beams.push(createBeamElement(txt.text.trim(), startPt, endPt, defaultHeightCm, 20));
+          const midX = (startPt.x + endPt.x) / 2;
+          const midY = (startPt.y + endPt.y) / 2;
+          const inferredHeight = inferBeamHeightFromNearbyTexts(midX, midY, texts, defaultHeightCm);
+          beams.push(
+            createBeamElement(cleanTagName, startPt, endPt, inferredHeight, DEFAULT_BEAM_WIDTH_CM)
+          );
           return true;
         }
       }
@@ -960,7 +1359,12 @@ export function autoDetectBeamsWithDiagnostics(
         if (!isDuplicateBeam(startPt, endPt, 'vertical')) {
           usedLabelIndices.add(tIdx);
           counts.gridGuidedBeams++;
-          beams.push(createBeamElement(txt.text.trim(), startPt, endPt, defaultHeightCm, 20));
+          const midX = (startPt.x + endPt.x) / 2;
+          const midY = (startPt.y + endPt.y) / 2;
+          const inferredHeight = inferBeamHeightFromNearbyTexts(midX, midY, texts, defaultHeightCm);
+          beams.push(
+            createBeamElement(cleanTagName, startPt, endPt, inferredHeight, DEFAULT_BEAM_WIDTH_CM)
+          );
           return true;
         }
       }

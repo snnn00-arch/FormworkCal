@@ -369,12 +369,55 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                   </div>
                 </div>
 
+                {/* Single-Edge Mode Quick Flip Side Button */}
+                {selectedBeam.attachMode === 'single_edge' && (
+                  <div className="bg-indigo-50/70 border border-indigo-200 rounded-lg p-2.5 flex items-center justify-between">
+                    <div>
+                      <span className="text-[11px] font-bold text-indigo-900 block">
+                        โหมดเกาะเส้นเดี่ยว ({selectedBeam.edgeRole === 'outer' ? 'เส้นขอบนอก' : 'เส้นขอบใน'})
+                      </span>
+                      <span className="text-[10px] text-indigo-700">
+                        ไม้แบบหนา 5 ซม. เกาะที่ฝั่ง{selectedBeam.leftSide.enabled !== false ? 'ซ้าย' : 'ขวา'}ของเส้น
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const leftWasActive = selectedBeam.leftSide.enabled !== false;
+                        onUpdateBeam({
+                          ...selectedBeam,
+                          leftSide: {
+                            ...selectedBeam.leftSide,
+                            enabled: !leftWasActive,
+                          },
+                          rightSide: {
+                            ...selectedBeam.rightSide,
+                            enabled: leftWasActive,
+                          },
+                        });
+                      }}
+                      className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-[11px] shadow-2xs transition-colors"
+                    >
+                      สลับฝั่งเกาะ (Flip)
+                    </button>
+                  </div>
+                )}
+
                 {/* Left Side Config */}
                 <div className="border border-slate-200 rounded-lg p-3 space-y-2 bg-white">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-800">
-                      ฝั่งซ้าย (Left Side)
-                    </span>
+                    <label className="flex items-center gap-1.5 font-bold text-slate-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedBeam.leftSide.enabled !== false}
+                        onChange={(e) =>
+                          onUpdateBeam({
+                            ...selectedBeam,
+                            leftSide: { ...selectedBeam.leftSide, enabled: e.target.checked },
+                          })
+                        }
+                      />
+                      <span>ฝั่งซ้าย (Left Side)</span>
+                    </label>
                     <select
                       value={selectedBeam.leftSide.heightCm}
                       onChange={(e) => {
@@ -436,9 +479,19 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                 {/* Right Side Config */}
                 <div className="border border-slate-200 rounded-lg p-3 space-y-2 bg-white">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-800">
-                      ฝั่งขวา (Right Side)
-                    </span>
+                    <label className="flex items-center gap-1.5 font-bold text-slate-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedBeam.rightSide.enabled !== false}
+                        onChange={(e) =>
+                          onUpdateBeam({
+                            ...selectedBeam,
+                            rightSide: { ...selectedBeam.rightSide, enabled: e.target.checked },
+                          })
+                        }
+                      />
+                      <span>ฝั่งขวา (Right Side)</span>
+                    </label>
                     <select
                       value={selectedBeam.rightSide.heightCm}
                       onChange={(e) => {
