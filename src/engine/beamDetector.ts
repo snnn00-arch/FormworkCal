@@ -1151,7 +1151,7 @@ export function classifyPlanLines(
 export function autoDetectBeamsWithDiagnostics(
   lines: RawVectorLine[],
   pixelsPerCm: number,
-  defaultHeightCm: FormworkHeight = 60,
+  defaultHeightCm: FormworkHeight = 50,
   texts: RawTextItem[] = [],
   pageDimensions?: { width: number; height: number }
 ): BeamDetectionDiagnostics {
@@ -2059,7 +2059,7 @@ export function extractColumnSnapPoints(
 export function autoDetectBeamsFromVectorLines(
   lines: RawVectorLine[],
   pixelsPerCm: number,
-  defaultHeightCm: FormworkHeight = 60,
+  defaultHeightCm: FormworkHeight = 50,
   texts: RawTextItem[] = [],
   pageDimensions?: { width: number; height: number }
 ): BeamElement[] {

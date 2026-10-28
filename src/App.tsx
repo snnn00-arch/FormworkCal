@@ -1,9 +1,10 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   BeamElement,
   DEFAULT_BEAM_WIDTH_CM,
   DrawingToolMode,
   FormworkHeight,
+  FormworkProjectData,
   Point,
 } from './types/formwork';
 import {
@@ -28,7 +29,10 @@ import {
 import {
   downloadCsvFile,
   exportCanvasAsPng,
+  exportFormworkPdfReport,
   generateRentalSummaryCsv,
+  loadProjectFile,
+  saveProjectFile,
 } from './engine/exportEngine';
 import { loadPdfFirstPage } from './utils/pdfLoader';
 import { TopToolbar } from './components/TopToolbar';
@@ -51,11 +55,48 @@ export const App: React.FC = () => {
   const [scaleNote, setScaleNote] = useState<string>('สเกลเริ่มต้น 1.20 px/ซม.');
   const [scaleMode, setScaleMode] = useState<'none' | 'manual_p1' | 'manual_p2'>('none');
 
-  const [defaultHeight, setDefaultHeight] = useState<FormworkHeight>(60);
+  // Default height set to 50 cm as requested
+  const [defaultHeight, setDefaultHeight] = useState<FormworkHeight>(50);
   const [defaultBeamWidthCm, setDefaultBeamWidthCm] = useState<number>(DEFAULT_BEAM_WIDTH_CM);
   const [autoParallelPair, setAutoParallelPair] = useState<boolean>(true);
   const [activeTool, setActiveTool] = useState<DrawingToolMode>('select');
-  const [selectedBeamId, setSelectedBeamId] = useState<string | null>(null);
+
+  // Multi-Selection State
+  const [selectedBeamIds, setSelectedBeamIds] = useState<string[]>([]);
+  const selectedBeamId = selectedBeamIds[selectedBeamIds.length - 1] || null;
+
+  // Undo / Redo History Stack
+  const [past, setPast] = useState<BeamElement[][]>([]);
+  const [future, setFuture] = useState<BeamElement[][]>([]);
+
+  const updateBeamsWithHistory = (
+    nextOrFn: BeamElement[] | ((prev: BeamElement[]) => BeamElement[])
+  ) => {
+    setBeams((curr) => {
+      const next = typeof nextOrFn === 'function' ? nextOrFn(curr) : nextOrFn;
+      setPast((p) => [...p.slice(-40), curr]);
+      setFuture([]);
+      return next;
+    });
+  };
+
+  const handleUndo = () => {
+    if (past.length === 0) return;
+    const previous = past[past.length - 1];
+    setPast((p) => p.slice(0, p.length - 1));
+    setFuture((f) => [beams, ...f]);
+    setBeams(previous);
+    setSelectedBeamIds((prev) => prev.filter((id) => previous.some((b) => b.id === id)));
+  };
+
+  const handleRedo = () => {
+    if (future.length === 0) return;
+    const next = future[0];
+    setFuture((f) => f.slice(1));
+    setPast((p) => [...p, beams]);
+    setBeams(next);
+    setSelectedBeamIds((prev) => prev.filter((id) => next.some((b) => b.id === id)));
+  };
 
   // Compute Placed Panels and Rental Summary
   const panels = useMemo(() => {
@@ -78,6 +119,25 @@ export const App: React.FC = () => {
     );
   }, [vectorLines, planTexts, beams, pixelsPerCm, defaultBeamWidthCm, pdfDimensions]);
 
+  // Selection Handler (with Shift-click toggle)
+  const handleSelectBeam = (id: string | null, isShift = false) => {
+    if (!id) {
+      setSelectedBeamIds([]);
+      return;
+    }
+    if (isShift) {
+      setSelectedBeamIds((prev) =>
+        prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+      );
+    } else {
+      setSelectedBeamIds([id]);
+    }
+  };
+
+  const handleClearSelection = () => {
+    setSelectedBeamIds([]);
+  };
+
   // Action Handlers
   const handleUploadPdf = async (file: File) => {
     try {
@@ -93,28 +153,28 @@ export const App: React.FC = () => {
       setPixelsPerCm(scaleResult.pixelsPerCm);
       setScaleNote(scaleResult.confidence);
 
-      // 2. Auto line classification + Grid-Referenced Beam Line Detection
+      // 2. Auto line classification + Grid-Referenced Beam Line Detection (default height = 50 cm)
       if (loaded.vectorLines.length > 0) {
         const diag = autoDetectBeamsWithDiagnostics(
           loaded.vectorLines,
           scaleResult.pixelsPerCm,
-          defaultHeight,
+          50,
           loaded.texts,
           dims
         );
         if (diag.beams.length > 0) {
           const withCorners = applyAutoCornerExtensions(diag.beams, scaleResult.pixelsPerCm);
-          setBeams(withCorners);
-          setSelectedBeamId(withCorners[0]?.id || null);
+          updateBeamsWithHistory(withCorners);
+          setSelectedBeamIds(withCorners[0] ? [withCorners[0].id] : []);
           alert(
-            `นำเข้า PDF สำเร็จ!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- ตัดเส้นกรอบกระดาษ/ตาราง: ${diag.counts.borderOrTitleBlock} เส้น\n- ตรวจพบแกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- รับรู้เส้นขอบและนำไม้แบบไปเกาะตามเส้น: ${diag.beams.length} ช่วง (ความกว้างคานเริ่มต้น 20 ซม.)`
+            `นำเข้า PDF สำเร็จ!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- ตัดเส้นกรอบกระดาษ/ตาราง: ${diag.counts.borderOrTitleBlock} เส้น\n- ตรวจพบแกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- เกาะไม้แบบตามเส้นคานจริง: ${diag.beams.length} ช่วง (ความสูงเริ่มต้น 50 ซม.)`
           );
           return;
         }
       }
 
       alert(
-        `นำเข้า PDF สำเร็จ!\n- ตั้งสเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม.\n- คุณสามารถกดปุ่ม "สแกนตรวจจับคาน (Auto)" หรือเลือกเครื่องมือ "วาดคาน (วงใน)" / "วาดคาน (วงนอก)" เพื่อเกาะไม้แบบตามเส้นได้ทันทีครับ`
+        `นำเข้า PDF สำเร็จ!\n- ตั้งสเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม.\n- คุณสามารถกดปุ่ม "สแกนคาน (Auto 50 ซม.)" หรือเลือกเครื่องมือวาดคานวงใน / วงนอก ได้ทันทีครับ`
       );
     } catch (err) {
       console.error('Failed to load PDF:', err);
@@ -130,21 +190,21 @@ export const App: React.FC = () => {
     const diag = autoDetectBeamsWithDiagnostics(
       vectorLines,
       pixelsPerCm,
-      defaultHeight,
+      50,
       planTexts,
       pdfDimensions
     );
     if (diag.beams.length === 0) {
       alert(
-        `สแกนจำแนกเส้นเสร็จสิ้น:\n- ตัดกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- พบแกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- ไม่พบคู่เส้นขนานของคานที่ชัดเจน คุณสามารถใช้ปุ่ม "วาดคาน (วงใน)" หรือ "วาดคาน (วงนอก)" คลิกเกาะไม้แบบตามเส้นบนแปลนได้ทันทีครับ`
+        `สแกนจำแนกเส้นเสร็จสิ้น:\n- ตัดกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- พบแกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- ไม่พบคู่เส้นขนานของคานที่ชัดเจน คุณสามารถใช้ปุ่ม "ตีกรอบวงใน" หรือ "วาดคาน (วงใน)" คลิกเกาะไม้แบบตามเส้นบนแปลนได้ทันทีครับ`
       );
       return;
     }
     const withCorners = applyAutoCornerExtensions(diag.beams, pixelsPerCm);
-    setBeams(withCorners);
-    setSelectedBeamId(withCorners[0]?.id || null);
+    updateBeamsWithHistory(withCorners);
+    setSelectedBeamIds(withCorners[0] ? [withCorners[0].id] : []);
     alert(
-      `สแกนรับรู้เส้นและเกาะไม้แบบสำเร็จ!\n- ตัดเส้นกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- ใช้แกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- เกาะไม้แบบตามเส้นคานจริง: ${diag.beams.length} ช่วง (กว้างมาตรฐาน 20 ซม., ไม้แบบหนา 5 ซม.)`
+      `สแกนรับรู้เส้นและเกาะไม้แบบสำเร็จ!\n- ตัดเส้นกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- ใช้แกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- เกาะไม้แบบตามเส้นคาน: ${diag.beams.length} ช่วง (ความสูง 50 ซม. ทั้งหมด, ไม้แบบหนา 5 ซม.)`
     );
   };
 
@@ -216,7 +276,6 @@ export const App: React.FC = () => {
         autoParallelPair
       );
     } else {
-      // 'draw_inner_line' or legacy 'draw_beam'
       createdEdges = createEdgesFromLineTool(
         `B${nextIdx}`,
         start,
@@ -231,8 +290,8 @@ export const App: React.FC = () => {
 
     if (createdEdges.length > 0) {
       const updated = applyAutoCornerExtensions([...beams, ...createdEdges], pixelsPerCm);
-      setBeams(updated);
-      setSelectedBeamId(createdEdges[0].id);
+      updateBeamsWithHistory(updated);
+      setSelectedBeamIds([createdEdges[0].id]);
       setActiveTool('select');
     }
   };
@@ -244,12 +303,12 @@ export const App: React.FC = () => {
       leftSide: { ...b.leftSide, customPanels: undefined },
       rightSide: { ...b.rightSide, customPanels: undefined },
     }));
-    setBeams(freshOptimized);
+    updateBeamsWithHistory(freshOptimized);
     alert('จัดเรียงแผ่นไม้แบบอัตโนมัติ (ป้องกันไม้แบบชน/ทับกัน และคิดความหนา 5 ซม.) เรียบร้อยแล้ว!');
   };
 
   const handleUpdateBeam = (updated: BeamElement) => {
-    setBeams((prev) =>
+    updateBeamsWithHistory((prev) =>
       applyAutoCornerExtensions(
         prev.map((b) => (b.id === updated.id ? updated : b)),
         pixelsPerCm
@@ -263,24 +322,93 @@ export const App: React.FC = () => {
     newEnd: Point,
     finalize = false
   ) => {
-    setBeams((prev) => {
-      const moved = prev.map((b) =>
-        b.id === beamId ? { ...b, start: newStart, end: newEnd } : b
+    if (finalize) {
+      updateBeamsWithHistory((prev) =>
+        applyAutoCornerExtensions(
+          prev.map((b) => (b.id === beamId ? { ...b, start: newStart, end: newEnd } : b)),
+          pixelsPerCm
+        )
       );
-      return finalize ? applyAutoCornerExtensions(moved, pixelsPerCm) : moved;
-    });
+    } else {
+      setBeams((prev) =>
+        prev.map((b) => (b.id === beamId ? { ...b, start: newStart, end: newEnd } : b))
+      );
+    }
+  };
+
+  const handleBatchMoveBeams = (
+    ids: string[],
+    dx: number,
+    dy: number,
+    finalize = false
+  ) => {
+    if (finalize) {
+      updateBeamsWithHistory((prev) =>
+        applyAutoCornerExtensions(
+          prev.map((b) => {
+            if (!ids.includes(b.id)) return b;
+            return {
+              ...b,
+              start: { x: b.start.x + dx, y: b.start.y + dy },
+              end: { x: b.end.x + dx, y: b.end.y + dy },
+              leftSide: { ...b.leftSide, customPanels: undefined },
+              rightSide: { ...b.rightSide, customPanels: undefined },
+            };
+          }),
+          pixelsPerCm
+        )
+      );
+    } else {
+      setBeams((prev) =>
+        prev.map((b) => {
+          if (!ids.includes(b.id)) return b;
+          return {
+            ...b,
+            start: { x: b.start.x + dx, y: b.start.y + dy },
+            end: { x: b.end.x + dx, y: b.end.y + dy },
+          };
+        })
+      );
+    }
   };
 
   const handleDeleteBeam = (beamId: string) => {
-    setBeams((prev) =>
+    updateBeamsWithHistory((prev) =>
       applyAutoCornerExtensions(
         prev.filter((b) => b.id !== beamId),
         pixelsPerCm
       )
     );
-    if (selectedBeamId === beamId) {
-      setSelectedBeamId(null);
-    }
+    setSelectedBeamIds((prev) => prev.filter((id) => id !== beamId));
+  };
+
+  const handleDeleteSelectedBeams = () => {
+    if (selectedBeamIds.length === 0) return;
+    updateBeamsWithHistory((prev) =>
+      applyAutoCornerExtensions(
+        prev.filter((b) => !selectedBeamIds.includes(b.id)),
+        pixelsPerCm
+      )
+    );
+    setSelectedBeamIds([]);
+  };
+
+  const handleBatchChangeHeight = (newHeight: FormworkHeight) => {
+    if (selectedBeamIds.length === 0) return;
+    updateBeamsWithHistory((prev) =>
+      applyAutoCornerExtensions(
+        prev.map((b) => {
+          if (!selectedBeamIds.includes(b.id)) return b;
+          return {
+            ...b,
+            defaultHeightCm: newHeight,
+            leftSide: { ...b.leftSide, heightCm: newHeight, customPanels: undefined },
+            rightSide: { ...b.rightSide, heightCm: newHeight, customPanels: undefined },
+          };
+        }),
+        pixelsPerCm
+      )
+    );
   };
 
   const handleResizeBoxGroup = (
@@ -289,10 +417,14 @@ export const App: React.FC = () => {
     p2: Point,
     finalize = false
   ) => {
-    setBeams((prev) => {
-      const updated = updateBoxGroupRectangle(prev, boxGroupId, p1, p2);
-      return finalize ? applyAutoCornerExtensions(updated, pixelsPerCm) : updated;
-    });
+    if (finalize) {
+      updateBeamsWithHistory((prev) => {
+        const updated = updateBoxGroupRectangle(prev, boxGroupId, p1, p2);
+        return applyAutoCornerExtensions(updated, pixelsPerCm);
+      });
+    } else {
+      setBeams((prev) => updateBoxGroupRectangle(prev, boxGroupId, p1, p2));
+    }
   };
 
   const handleMoveBoxGroup = (
@@ -301,27 +433,65 @@ export const App: React.FC = () => {
     dy: number,
     finalize = false
   ) => {
-    setBeams((prev) => {
-      const moved = prev.map((b) => {
-        if (b.boxGroupId !== boxGroupId) return b;
-        return {
-          ...b,
-          start: { x: b.start.x + dx, y: b.start.y + dy },
-          end: { x: b.end.x + dx, y: b.end.y + dy },
-          leftSide: { ...b.leftSide, customPanels: undefined },
-          rightSide: { ...b.rightSide, customPanels: undefined },
-        };
+    if (finalize) {
+      updateBeamsWithHistory((prev) => {
+        const moved = prev.map((b) => {
+          if (b.boxGroupId !== boxGroupId) return b;
+          return {
+            ...b,
+            start: { x: b.start.x + dx, y: b.start.y + dy },
+            end: { x: b.end.x + dx, y: b.end.y + dy },
+            leftSide: { ...b.leftSide, customPanels: undefined },
+            rightSide: { ...b.rightSide, customPanels: undefined },
+          };
+        });
+        return applyAutoCornerExtensions(moved, pixelsPerCm);
       });
-      return finalize ? applyAutoCornerExtensions(moved, pixelsPerCm) : moved;
-    });
+    } else {
+      setBeams((prev) =>
+        prev.map((b) => {
+          if (b.boxGroupId !== boxGroupId) return b;
+          return {
+            ...b,
+            start: { x: b.start.x + dx, y: b.start.y + dy },
+            end: { x: b.end.x + dx, y: b.end.y + dy },
+          };
+        })
+      );
+    }
   };
 
   const handleUngroupBox = (boxGroupId: string) => {
-    setBeams((prev) => applyAutoCornerExtensions(ungroupBoxEdges(prev, boxGroupId), pixelsPerCm));
+    updateBeamsWithHistory((prev) =>
+      applyAutoCornerExtensions(ungroupBoxEdges(prev, boxGroupId), pixelsPerCm)
+    );
   };
 
-  // Global keyboard shortcut: Delete / Backspace deletes the selected beam/formwork strip; Escape cancels drawing or selection; U ungroups selected box
-  React.useEffect(() => {
+  // Select Beams based on clicked matrix cell / totals / free cut
+  const handleSelectBySku = (filter: {
+    length?: number;
+    height?: FormworkHeight;
+    isFree?: boolean;
+  }) => {
+    let matchingPanels = panels;
+    if (filter.isFree) {
+      matchingPanels = matchingPanels.filter(
+        (p) => p.type === 'free' && (!filter.height || p.heightCm === filter.height)
+      );
+    } else {
+      matchingPanels = matchingPanels.filter(
+        (p) =>
+          p.type === 'standard' &&
+          (!filter.length || p.lengthCm === filter.length) &&
+          (!filter.height || p.heightCm === filter.height)
+      );
+    }
+    const matchingBeamIds = Array.from(new Set(matchingPanels.map((p) => p.beamId)));
+    setSelectedBeamIds(matchingBeamIds);
+  };
+
+  // Keyboard Shortcuts: Ctrl+Z (Undo), Ctrl+Y (Redo), Delete/Backspace, U (Ungroup), Escape
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (
@@ -334,9 +504,21 @@ export const App: React.FC = () => {
         return;
       }
 
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBeamId) {
+      const isCtrlOrMeta = e.ctrlKey || e.metaKey;
+
+      if (isCtrlOrMeta && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault();
-        handleDeleteBeam(selectedBeamId);
+        if (e.shiftKey) {
+          handleRedo();
+        } else {
+          handleUndo();
+        }
+      } else if (isCtrlOrMeta && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        handleRedo();
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBeamIds.length > 0) {
+        e.preventDefault();
+        handleDeleteSelectedBeams();
       } else if ((e.key === 'u' || e.key === 'U') && selectedBeamId) {
         const selected = beams.find((b) => b.id === selectedBeamId);
         if (selected?.boxGroupId) {
@@ -346,18 +528,18 @@ export const App: React.FC = () => {
       } else if (e.key === 'Escape') {
         if (activeTool !== 'select') {
           setActiveTool('select');
-        } else if (selectedBeamId) {
-          setSelectedBeamId(null);
+        } else if (selectedBeamIds.length > 0) {
+          setSelectedBeamIds([]);
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedBeamId, activeTool, pixelsPerCm, beams]);
+  }, [selectedBeamIds, selectedBeamId, activeTool, beams, past, future]);
 
   const handleResetBeamToAuto = (beamId: string) => {
-    setBeams((prev) =>
+    updateBeamsWithHistory((prev) =>
       applyAutoCornerExtensions(
         prev.map((b) => {
           if (b.id !== beamId) return b;
@@ -370,6 +552,58 @@ export const App: React.FC = () => {
         pixelsPerCm
       )
     );
+  };
+
+  // Project Save and Load Handlers
+  const handleSaveProject = () => {
+    const projectData: FormworkProjectData = {
+      version: '1.0',
+      appName: 'ModularFormworkCalculator',
+      savedAt: new Date().toISOString(),
+      pixelsPerCm,
+      scaleNote,
+      defaultHeight,
+      defaultBeamWidthCm,
+      autoParallelPair,
+      beams,
+      pdfDimensions,
+      pdfImageUrl,
+    };
+    saveProjectFile(projectData);
+  };
+
+  const handleLoadProject = async (file: File) => {
+    try {
+      const loaded = await loadProjectFile(file);
+      setBeams(loaded.beams);
+      setPixelsPerCm(loaded.pixelsPerCm);
+      setScaleNote(loaded.scaleNote);
+      setDefaultHeight(loaded.defaultHeight);
+      setDefaultBeamWidthCm(loaded.defaultBeamWidthCm);
+      setAutoParallelPair(loaded.autoParallelPair);
+      setPdfDimensions(loaded.pdfDimensions);
+      setPdfImageUrl(loaded.pdfImageUrl || null);
+      setSelectedBeamIds(loaded.beams[0] ? [loaded.beams[0].id] : []);
+      setPast([]);
+      setFuture([]);
+      alert(`โหลดโปรเจกต์สำเร็จ!\n- นำเข้าไม้แบบ ${loaded.beams.length} ช่วง\n- สเกล ${loaded.pixelsPerCm.toFixed(2)} px/ซม.`);
+    } catch (err: any) {
+      console.error('Failed to load project:', err);
+      alert(`ไม่สามารถเปิดไฟล์โปรเจกต์ได้: ${err.message || 'รูปแบบไฟล์ไม่ถูกต้อง'}`);
+    }
+  };
+
+  // Official PDF Report Export Handler
+  const handleExportPdf = async () => {
+    try {
+      await exportFormworkPdfReport(canvasRef.current, summary, {
+        scale: pixelsPerCm,
+        totalBeams: beams.length,
+      });
+    } catch (err) {
+      console.error('Failed to export PDF:', err);
+      alert('เกิดข้อผิดพลาดในการสร้างรายงาน PDF');
+    }
   };
 
   const handleExportCsv = () => {
@@ -403,6 +637,13 @@ export const App: React.FC = () => {
         onAutoPlaceFormwork={handleAutoPlaceFormwork}
         onExportCsv={handleExportCsv}
         onExportPng={handleExportPng}
+        onExportPdf={handleExportPdf}
+        onUndo={handleUndo}
+        canUndo={past.length > 0}
+        onRedo={handleRedo}
+        canRedo={future.length > 0}
+        onSaveProject={handleSaveProject}
+        onLoadProject={handleLoadProject}
       />
 
       {/* Main Workspace: Interactive Canvas + Right Sidebar */}
@@ -415,8 +656,10 @@ export const App: React.FC = () => {
           snapPoints={snapPoints}
           pixelsPerCm={pixelsPerCm}
           selectedBeamId={selectedBeamId}
-          onSelectBeam={setSelectedBeamId}
+          selectedBeamIds={selectedBeamIds}
+          onSelectBeam={handleSelectBeam}
           onMoveBeam={handleMoveBeam}
+          onBatchMoveBeams={handleBatchMoveBeams}
           onDeleteBeam={handleDeleteBeam}
           onResizeBoxGroup={handleResizeBoxGroup}
           onMoveBoxGroup={handleMoveBoxGroup}
@@ -430,8 +673,12 @@ export const App: React.FC = () => {
         <RightSidebar
           summary={summary}
           beams={beams}
-          selectedBeamId={selectedBeamId}
-          onSelectBeam={setSelectedBeamId}
+          selectedBeamIds={selectedBeamIds}
+          onSelectBeam={handleSelectBeam}
+          onSelectBySku={handleSelectBySku}
+          onBatchChangeHeight={handleBatchChangeHeight}
+          onDeleteSelectedBeams={handleDeleteSelectedBeams}
+          onClearSelection={handleClearSelection}
           onUpdateBeam={handleUpdateBeam}
           onDeleteBeam={handleDeleteBeam}
           onResetBeamToAuto={handleResetBeamToAuto}

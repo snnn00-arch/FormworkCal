@@ -3,6 +3,7 @@ import {
   BeamElement,
   FORMWORK_HEIGHTS,
   FORMWORK_THICKNESS_CM,
+  FormworkHeight,
   getSkuTheme,
   RentalSummaryReport,
   STANDARD_LENGTHS,
@@ -15,13 +16,19 @@ import {
   RotateCcw,
   AlertCircle,
   Scissors,
+  CheckSquare,
+  X,
 } from 'lucide-react';
 
 interface RightSidebarProps {
   summary: RentalSummaryReport;
   beams: BeamElement[];
-  selectedBeamId: string | null;
-  onSelectBeam: (beamId: string | null) => void;
+  selectedBeamIds: string[];
+  onSelectBeam: (beamId: string | null, isShift?: boolean) => void;
+  onSelectBySku?: (filter: { length?: number; height?: FormworkHeight; isFree?: boolean }) => void;
+  onBatchChangeHeight?: (h: FormworkHeight) => void;
+  onDeleteSelectedBeams?: () => void;
+  onClearSelection?: () => void;
   onUpdateBeam: (updated: BeamElement) => void;
   onDeleteBeam: (beamId: string) => void;
   onResetBeamToAuto: (beamId: string) => void;
@@ -31,17 +38,28 @@ interface RightSidebarProps {
 export const RightSidebar: React.FC<RightSidebarProps> = ({
   summary,
   beams,
-  selectedBeamId,
+  selectedBeamIds,
   onSelectBeam,
+  onSelectBySku,
+  onBatchChangeHeight,
+  onDeleteSelectedBeams,
+  onClearSelection,
   onUpdateBeam,
   onDeleteBeam,
   onResetBeamToAuto,
   onUngroupBox,
 }) => {
   const [activeTab, setActiveTab] = useState<'summary' | 'edit' | 'colors'>('summary');
+  const selectedBeamId = selectedBeamIds[selectedBeamIds.length - 1] || null;
   const selectedBeam = beams.find((b) => b.id === selectedBeamId);
 
-  // If a beam is selected and user is on summary tab, auto-switch to edit if preferred, or keep tabs flexible
+  // Multi-selected beams calculation
+  const multiSelectedBeams = beams.filter((b) => selectedBeamIds.includes(b.id));
+  const totalSelectedLengthM = multiSelectedBeams.reduce((sum, b) => {
+    const lenPx = Math.hypot(b.end.x - b.start.x, b.end.y - b.start.y);
+    return sum + lenPx / 100; // approximate meters
+  }, 0);
+
   return (
     <aside className="w-96 bg-white border-l border-[#E2E8F0] flex flex-col h-full overflow-hidden shadow-xs">
       {/* Sidebar Header Tabs */}
@@ -67,7 +85,13 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
           }`}
         >
           <Edit3 className="w-3.5 h-3.5" />
-          <span>แก้ไขคาน {selectedBeam ? `(${selectedBeam.name})` : ''}</span>
+          <span>
+            {selectedBeamIds.length > 1
+              ? `เลือก ${selectedBeamIds.length} เส้น`
+              : selectedBeam
+              ? `แก้ไข (${selectedBeam.name})`
+              : 'แก้ไขคาน'}
+          </span>
         </button>
 
         <button
@@ -91,7 +115,16 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
           <div className="space-y-5">
             {/* KPI Summary Cards */}
             <div className="grid grid-cols-2 gap-2.5">
-              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+              <div
+                onClick={() => {
+                  if (summary.totalStandardPanels > 0 && onSelectBySku) {
+                    onSelectBySku({});
+                    setActiveTab('edit');
+                  }
+                }}
+                className="bg-slate-50 hover:bg-slate-100/90 border border-slate-200 rounded-lg p-3 cursor-pointer transition-all hover:shadow-2xs"
+                title="คลิกเพื่อเลือกไม้แบบสำเร็จรูปทั้งหมดบนแปลน"
+              >
                 <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">
                   รวมไม้แบบเช่ามาตรฐาน
                 </span>
@@ -104,7 +137,16 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                 </span>
               </div>
 
-              <div className="bg-rose-50/60 border border-rose-200 rounded-lg p-3">
+              <div
+                onClick={() => {
+                  if (summary.freeItems.length > 0 && onSelectBySku) {
+                    onSelectBySku({ isFree: true });
+                    setActiveTab('edit');
+                  }
+                }}
+                className="bg-rose-50/60 hover:bg-rose-100/80 border border-rose-200 rounded-lg p-3 cursor-pointer transition-all hover:shadow-2xs"
+                title="คลิกเพื่อเลือกไม้ตัดเสริมหน้างานทั้งหมดบนแปลน"
+              >
                 <span className="text-[11px] font-medium text-rose-600 uppercase tracking-wider block">
                   รวมระยะความยาวฟรี
                 </span>
@@ -118,14 +160,14 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
               </div>
             </div>
 
-            {/* 12-SKU Matrix Table */}
+            {/* 12-SKU Matrix Table (with interactive click-to-select) */}
             <div>
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
                   ตารางสรุปจำนวนแผ่น (12 SKUs)
                 </h3>
-                <span className="text-[11px] text-slate-500">
-                  หนา {FORMWORK_THICKNESS_CM} ซม. ทุกขนาด
+                <span className="text-[11px] text-blue-600 font-medium">
+                  คลิกตัวเลขเพื่อเลือกบนแปลน
                 </span>
               </div>
 
@@ -135,8 +177,18 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                     <tr className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200 text-center">
                       <th className="py-2 px-2 text-left">ยาว \ สูง</th>
                       {FORMWORK_HEIGHTS.map((h) => (
-                        <th key={h} className="py-2 px-1 text-center">
-                          สูง {h} ซม.
+                        <th
+                          key={h}
+                          onClick={() => {
+                            if (summary.totalsByHeight[h] > 0 && onSelectBySku) {
+                              onSelectBySku({ height: h });
+                              setActiveTab('edit');
+                            }
+                          }}
+                          className="py-2 px-1 text-center cursor-pointer hover:bg-slate-200 transition-colors"
+                          title={`คลิกเพื่อเลือกไม้แบบสูง ${h} ซม. ทั้งหมด`}
+                        >
+                          สูง {h}
                         </th>
                       ))}
                       <th className="py-2 px-2 text-right bg-slate-200/60">รวม</th>
@@ -145,17 +197,42 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                   <tbody className="divide-y divide-slate-200 text-center">
                     {STANDARD_LENGTHS.map((len) => (
                       <tr key={len} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="py-2 px-2 text-left font-bold text-slate-800">
+                        <td
+                          onClick={() => {
+                            if (summary.totalsByLength[len] > 0 && onSelectBySku) {
+                              onSelectBySku({ length: len });
+                              setActiveTab('edit');
+                            }
+                          }}
+                          className="py-2 px-2 text-left font-bold text-slate-800 cursor-pointer hover:text-blue-600"
+                          title={`คลิกเพื่อเลือกไม้แบบความยาว ${len} ซม. ทั้งหมด`}
+                        >
                           {len} ซม.
                         </td>
                         {FORMWORK_HEIGHTS.map((h) => {
                           const count = summary.matrix[len][h];
                           const theme = getSkuTheme(len, h);
                           return (
-                            <td key={h} className="py-2 px-1">
+                            <td
+                              key={h}
+                              onClick={() => {
+                                if (count > 0 && onSelectBySku) {
+                                  onSelectBySku({ length: len, height: h });
+                                  setActiveTab('edit');
+                                }
+                              }}
+                              className={`py-2 px-1 ${
+                                count > 0 ? 'cursor-pointer hover:opacity-80 active:scale-95' : ''
+                              }`}
+                              title={
+                                count > 0
+                                  ? `คลิกเพื่อเลือกไม้แบบ ${len}×${h} ซม. (${count} แผ่น) บนแปลน`
+                                  : undefined
+                              }
+                            >
                               {count > 0 ? (
                                 <span
-                                  className="inline-block px-1.5 py-0.5 rounded font-bold text-xs"
+                                  className="inline-block px-1.5 py-0.5 rounded font-bold text-xs shadow-2xs hover:ring-2 hover:ring-blue-400"
                                   style={{
                                     backgroundColor: theme.badgeBg,
                                     color: theme.badgeText,
@@ -170,7 +247,16 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                             </td>
                           );
                         })}
-                        <td className="py-2 px-2 text-right font-bold text-slate-900 bg-slate-50">
+                        <td
+                          onClick={() => {
+                            if (summary.totalsByLength[len] > 0 && onSelectBySku) {
+                              onSelectBySku({ length: len });
+                              setActiveTab('edit');
+                            }
+                          }}
+                          className="py-2 px-2 text-right font-bold text-slate-900 bg-slate-50 cursor-pointer hover:bg-blue-100/70"
+                          title={`คลิกเพื่อเลือกไม้แบบความยาว ${len} ซม. ทั้งหมด`}
+                        >
                           {summary.totalsByLength[len]}
                         </td>
                       </tr>
@@ -178,11 +264,30 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                     <tr className="bg-slate-100/90 font-bold text-slate-800 border-t-2 border-slate-300">
                       <td className="py-2 px-2 text-left">รวมตามความสูง</td>
                       {FORMWORK_HEIGHTS.map((h) => (
-                        <td key={h} className="py-2 px-1 text-center">
+                        <td
+                          key={h}
+                          onClick={() => {
+                            if (summary.totalsByHeight[h] > 0 && onSelectBySku) {
+                              onSelectBySku({ height: h });
+                              setActiveTab('edit');
+                            }
+                          }}
+                          className="py-2 px-1 text-center cursor-pointer hover:bg-blue-200/60"
+                          title={`คลิกเพื่อเลือกไม้แบบความสูง ${h} ซม. ทั้งหมด`}
+                        >
                           {summary.totalsByHeight[h]}
                         </td>
                       ))}
-                      <td className="py-2 px-2 text-right text-emerald-800 bg-slate-200/80">
+                      <td
+                        onClick={() => {
+                          if (summary.totalStandardPanels > 0 && onSelectBySku) {
+                            onSelectBySku({});
+                            setActiveTab('edit');
+                          }
+                        }}
+                        className="py-2 px-2 text-right text-emerald-800 bg-slate-200/80 cursor-pointer hover:bg-emerald-200"
+                        title="คลิกเพื่อเลือกไม้แบบสำเร็จรูปทั้งหมด"
+                      >
                         {summary.totalStandardPanels}
                       </td>
                     </tr>
@@ -210,11 +315,18 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                   return (
                     <div
                       key={h}
-                      className="p-2 rounded border text-center"
+                      onClick={() => {
+                        if (stat.count > 0 && onSelectBySku) {
+                          onSelectBySku({ height: h, isFree: true });
+                          setActiveTab('edit');
+                        }
+                      }}
+                      className="p-2 rounded border text-center cursor-pointer hover:scale-105 transition-transform"
                       style={{
                         backgroundColor: theme.badgeBg,
                         borderColor: theme.stroke,
                       }}
+                      title={`คลิกเพื่อเลือกไม้ตัดเสริมสูง ${h} ซม. (${stat.count} จุด) บนแปลน`}
                     >
                       <span className="text-[10px] font-bold block" style={{ color: theme.badgeText }}>
                         สูง {h} ซม.
@@ -231,38 +343,42 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                 })}
               </div>
 
-              {/* Free items list */}
-              {summary.freeItems.length > 0 ? (
-                <div className="max-h-48 overflow-y-auto border border-rose-200 rounded-lg divide-y divide-rose-100 text-xs bg-rose-50/30">
-                  {summary.freeItems.map((item, idx) => (
+              {/* Free length list */}
+              <div className="max-h-48 overflow-y-auto space-y-1.5 border border-slate-200 rounded-lg p-2 bg-slate-50/50 text-xs">
+                {summary.freeItems.length === 0 ? (
+                  <p className="text-center text-slate-400 py-3 text-[11px]">
+                    ไม่มีเศษไม้ตัดเสริม (แผงสำเร็จรูปจัดลงตัวพอดี)
+                  </p>
+                ) : (
+                  summary.freeItems.map((item, idx) => (
                     <div
                       key={`${item.id}-${idx}`}
-                      className="px-3 py-1.5 flex items-center justify-between hover:bg-rose-100/50"
+                      onClick={() => {
+                        const targetBeam = beams.find((b) => b.name === item.beamName || b.id === item.id);
+                        if (targetBeam) {
+                          onSelectBeam(targetBeam.id);
+                          setActiveTab('edit');
+                        }
+                      }}
+                      className="flex items-center justify-between p-1.5 bg-white border border-rose-200 rounded hover:border-rose-400 cursor-pointer transition-colors shadow-2xs"
+                      title="คลิกเพื่อกระโดดไปดูคานนี้บนแปลน"
                     >
-                      <div>
-                        <span className="font-semibold text-rose-950">
-                          {item.beamName}
-                        </span>{' '}
-                        <span className="text-[11px] text-rose-600">
+                      <div className="truncate pr-2">
+                        <span className="font-bold text-slate-800">{item.beamName}</span>{' '}
+                        <span className="text-slate-500">
                           (ฝั่ง{item.side === 'left' ? 'ซ้าย' : 'ขวา'})
                         </span>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-rose-700 bg-rose-100 border border-rose-300 px-1.5 py-0.5 rounded text-[11px]">
-                          ฟรี {item.lengthCm} ซม.
-                        </span>
-                        <span className="text-[11px] text-slate-500 font-medium">
+                      <div className="flex items-center gap-1 shrink-0 font-mono font-bold text-rose-700">
+                        <span>{item.lengthCm} ซม.</span>
+                        <span className="text-[10px] font-normal text-slate-400">
                           (สูง {item.heightCm})
                         </span>
                       </div>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-slate-400 italic text-center py-2 bg-slate-50 rounded border border-dashed border-slate-200">
-                  ไม่มีเศษความยาวฟรี (จัดเรียงแผ่นมาตรฐานลงตัว 100%)
-                </p>
-              )}
+                  ))
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -270,29 +386,103 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
         {/* ================= TAB 2: EDIT INSPECTOR ================= */}
         {activeTab === 'edit' && (
           <div className="space-y-4">
-            {/* Quick Beam Selector */}
-            <div>
-              <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-1.5">
-                เลือกคานบนแปลน:
-              </label>
-              <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-1 bg-slate-50 border border-slate-200 rounded-md">
-                {beams.map((b) => (
-                  <button
-                    key={b.id}
-                    onClick={() => onSelectBeam(b.id)}
-                    className={`px-2 py-1 rounded text-xs font-semibold transition-all ${
-                      b.id === selectedBeamId
-                        ? 'bg-slate-900 text-white shadow-2xs'
-                        : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    {b.name}
-                  </button>
-                ))}
-              </div>
-            </div>
+            {/* Multi-Selection Batch Controls Banner */}
+            {selectedBeamIds.length > 1 ? (
+              <div className="bg-blue-50 border border-blue-300 rounded-lg p-3 space-y-3 shadow-2xs">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <CheckSquare className="w-4 h-4 text-blue-600" />
+                    <div>
+                      <span className="font-bold text-blue-950 text-xs block">
+                        เลือกไม้แบบ {selectedBeamIds.length} เส้นพร้อมกัน
+                      </span>
+                      <span className="text-[11px] text-blue-700">
+                        ความยาวรวมประมาณ {totalSelectedLengthM.toFixed(2)} เมตร
+                      </span>
+                    </div>
+                  </div>
+                  {onClearSelection && (
+                    <button
+                      onClick={onClearSelection}
+                      className="p-1 rounded text-blue-600 hover:bg-blue-100 text-xs"
+                      title="ยกเลิกการเลือกทั้งหมด"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
 
-            {selectedBeam ? (
+                {/* Batch Change Height */}
+                {onBatchChangeHeight && (
+                  <div>
+                    <span className="text-[11px] font-semibold text-blue-900 block mb-1">
+                      ปรับความสูงไม้แบบทั้งชุด:
+                    </span>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {FORMWORK_HEIGHTS.map((h) => (
+                        <button
+                          key={h}
+                          onClick={() => onBatchChangeHeight(h)}
+                          className="py-1 px-1 rounded bg-white hover:bg-blue-600 hover:text-white border border-blue-200 text-blue-900 font-bold text-xs shadow-2xs transition-colors"
+                          title={`เปลี่ยนความสูงทั้ง ${selectedBeamIds.length} เส้นเป็น ${h} ซม.`}
+                        >
+                          {h} ซม.
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Batch Delete Action */}
+                {onDeleteSelectedBeams && (
+                  <button
+                    onClick={onDeleteSelectedBeams}
+                    className="w-full py-1.5 px-3 rounded bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>ลบไม้แบบที่เลือกทั้งหมด ({selectedBeamIds.length} เส้น)</span>
+                  </button>
+                )}
+
+                {/* List of selected beam names */}
+                <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto pt-1">
+                  {multiSelectedBeams.map((b) => (
+                    <span
+                      key={b.id}
+                      className="px-1.5 py-0.5 rounded text-[10px] bg-white border border-blue-200 text-blue-900 font-medium"
+                    >
+                      {b.name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              /* Quick Beam Selector */
+              <div>
+                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-1.5">
+                  เลือกคานบนแปลน:
+                </label>
+                <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-1 bg-slate-50 border border-slate-200 rounded-md">
+                  {beams.map((b) => (
+                    <button
+                      key={b.id}
+                      onClick={(e) => onSelectBeam(b.id, e.shiftKey)}
+                      className={`px-2 py-1 rounded text-xs font-semibold transition-all ${
+                        selectedBeamIds.includes(b.id)
+                          ? 'bg-slate-900 text-white shadow-2xs'
+                          : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                      }`}
+                      title="คลิกเลือก หรือกด Shift ค้างเพื่อเลือกหลายเส้น"
+                    >
+                      {b.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Single Beam Inspector (when exactly 1 beam is selected) */}
+            {selectedBeam && selectedBeamIds.length <= 1 ? (
               <div className="space-y-4 pt-2 border-t border-slate-200 text-xs">
                 <div className="flex items-center justify-between">
                   <h4 className="font-bold text-slate-900 text-sm">
@@ -510,17 +700,17 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                   <span>คำนวณจัดเรียงใหม่อัตโนมัติ (Reset Auto)</span>
                 </button>
               </div>
-            ) : (
+            ) : selectedBeamIds.length === 0 ? (
               <div className="text-center py-10 px-4 bg-slate-50 rounded-lg border border-dashed border-slate-200">
                 <AlertCircle className="w-8 h-8 text-slate-400 mx-auto mb-2" />
                 <p className="text-xs font-semibold text-slate-700 mb-1">
                   ยังไม่ได้เลือกคาน
                 </p>
                 <p className="text-[11px] text-slate-500">
-                  คลิกที่คานบนแปลน หรือเลือกจากรายชื่อคานด้านบนเพื่อแก้ไข
+                  คลิกที่คานบนแปลน หรือกด Shift ค้างเพื่อเลือกหลายเส้นพร้อมกัน
                 </p>
               </div>
-            )}
+            ) : null}
           </div>
         )}
 
@@ -549,7 +739,14 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                       return (
                         <div
                           key={h}
-                          className="flex items-center gap-2 p-1.5 rounded bg-white border border-slate-200 shadow-2xs"
+                          onClick={() => {
+                            if (onSelectBySku) {
+                              onSelectBySku({ length: len, height: h });
+                              setActiveTab('edit');
+                            }
+                          }}
+                          className="flex items-center gap-2 p-1.5 rounded bg-white border border-slate-200 shadow-2xs cursor-pointer hover:border-blue-400"
+                          title="คลิกเพื่อเลือกไม้แบบขนาดนี้บนแปลน"
                         >
                           <div
                             className="w-4 h-4 rounded border shrink-0"
@@ -584,7 +781,14 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                     return (
                       <div
                         key={h}
-                        className="flex items-center gap-2 p-1.5 rounded bg-white border border-rose-200 shadow-2xs"
+                        onClick={() => {
+                          if (onSelectBySku) {
+                            onSelectBySku({ height: h, isFree: true });
+                            setActiveTab('edit');
+                          }
+                        }}
+                        className="flex items-center gap-2 p-1.5 rounded bg-white border border-rose-200 shadow-2xs cursor-pointer hover:border-rose-400"
+                        title="คลิกเพื่อเลือกไม้ตัดเสริมขนาดนี้บนแปลน"
                       >
                         <div
                           className="w-4 h-4 rounded border-2 border-dashed shrink-0"

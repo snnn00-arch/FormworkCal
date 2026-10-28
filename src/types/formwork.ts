@@ -232,3 +232,19 @@ export interface RentalSummaryReport {
   freeTotalsByHeightCm: Record<FormworkHeight, { count: number; totalLengthCm: number }>;
   totalFreeLengthCm: number;
 }
+
+export interface FormworkProjectData {
+  version: '1.0';
+  appName: 'ModularFormworkCalculator';
+  savedAt: string;
+  projectName?: string;
+  pixelsPerCm: number;
+  scaleNote: string;
+  defaultHeight: FormworkHeight;
+  defaultBeamWidthCm: number;
+  autoParallelPair: boolean;
+  beams: BeamElement[];
+  pdfDimensions?: { width: number; height: number };
+  pdfImageUrl?: string | null;
+}
+

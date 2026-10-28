@@ -16,9 +16,11 @@ interface PlanCanvasProps {
   panels: PlacedPanel[];
   snapPoints?: SnapPoint[];
   pixelsPerCm: number;
-  selectedBeamId: string | null;
-  onSelectBeam: (beamId: string | null) => void;
+  selectedBeamId?: string | null;
+  selectedBeamIds?: string[];
+  onSelectBeam: (beamId: string | null, isShift?: boolean) => void;
   onMoveBeam?: (beamId: string, newStart: Point, newEnd: Point, finalize?: boolean) => void;
+  onBatchMoveBeams?: (beamIds: string[], dx: number, dy: number, finalize?: boolean) => void;
   onDeleteBeam?: (beamId: string) => void;
   onResizeBoxGroup?: (boxGroupId: string, anchorPt: Point, newCornerPt: Point, finalize?: boolean) => void;
   onMoveBoxGroup?: (boxGroupId: string, dx: number, dy: number, finalize?: boolean) => void;
@@ -32,13 +34,14 @@ interface PlanCanvasProps {
 interface DragBeamState {
   beamId: string;
   boxGroupId?: string;
-  mode: 'move_beam' | 'move_start' | 'move_end' | 'resize_box_corner' | 'move_box';
+  mode: 'move_beam' | 'move_start' | 'move_end' | 'resize_box_corner' | 'move_box' | 'move_multi';
   cornerKey?: 'nw' | 'ne' | 'se' | 'sw';
   anchorPt?: Point;
   startMouse: Point;
   origStart: Point;
   origEnd: Point;
   origEdges?: Array<{ id: string; start: Point; end: Point }>;
+  multiBeamIds?: string[];
   hasMoved: boolean;
 }
 
@@ -100,9 +103,11 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   panels,
   snapPoints = [],
   pixelsPerCm,
-  selectedBeamId,
+  selectedBeamId = null,
+  selectedBeamIds,
   onSelectBeam,
   onMoveBeam,
+  onBatchMoveBeams,
   onDeleteBeam,
   onResizeBoxGroup,
   onMoveBoxGroup,
@@ -112,6 +117,9 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   scaleMode,
   onCalibrationPointsSelected,
 }) => {
+  const effectiveSelectedIds = selectedBeamIds || (selectedBeamId ? [selectedBeamId] : []);
+  const primarySelectedId = effectiveSelectedIds[effectiveSelectedIds.length - 1] || null;
+
   const containerRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Point>({ x: 50, y: 50 });
@@ -217,7 +225,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
 
     // 3. Draw ONLY Recognized Edge Lines (NO solid beam block covering the PDF plan!)
     for (const beam of beams) {
-      const isSelected = beam.id === selectedBeamId;
+      const isSelected = effectiveSelectedIds.includes(beam.id);
       const bDx = beam.end.x - beam.start.x;
       const bDy = beam.end.y - beam.start.y;
       const bLen = Math.hypot(bDx, bDy) || 1;
@@ -275,7 +283,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
 
       const [p1, p2, p3, p4] = getPlacedPanelPolygon(panel, parentBeam, pixelsPerCm);
       const panelLenPx = panel.lengthCm * pixelsPerCm;
-      const isParentSelected = parentBeam.id === selectedBeamId;
+      const isParentSelected = effectiveSelectedIds.includes(parentBeam.id);
       const isPanelClicked = panel.id === selectedPanelId;
 
       const theme = panel.skuTheme;
@@ -325,8 +333,8 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     }
 
     // 4b. Draw Interactive Drag Handles: 4 Corner Handles for Box Group, or 2 Endpoints for Single Line
-    const selectedBeam = beams.find((b) => b.id === selectedBeamId);
-    if (selectedBeam) {
+    const selectedBeam = beams.find((b) => b.id === primarySelectedId);
+    if (selectedBeam && effectiveSelectedIds.length <= 1) {
       if (selectedBeam.boxGroupId) {
         const boxEdges = beams.filter((b) => b.boxGroupId === selectedBeam.boxGroupId);
         if (boxEdges.length > 0) {
@@ -545,9 +553,11 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
 
     // Select & Drag Mode ('select')
     if (activeTool === 'select') {
-      // 1. Check 4 corner handles of currently selected box group first
-      const currentSelected = beams.find((b) => b.id === selectedBeamId);
-      if (currentSelected?.boxGroupId) {
+      const isShift = e.shiftKey;
+      const currentSelected = beams.find((b) => b.id === primarySelectedId);
+
+      // 1. Check 4 corner handles of currently selected box group first (only in single selection)
+      if (effectiveSelectedIds.length <= 1 && currentSelected?.boxGroupId) {
         const boxEdges = beams.filter((b) => b.boxGroupId === currentSelected.boxGroupId);
         if (boxEdges.length > 0) {
           const bMinX = Math.min(...boxEdges.flatMap((b) => [b.start.x, b.end.x]));
@@ -619,8 +629,8 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         }
       }
 
-      // 1b. Check endpoint handles of currently selected single beam
-      if (currentSelected && !currentSelected.boxGroupId) {
+      // 1b. Check endpoint handles of currently selected single beam (only in single selection)
+      if (effectiveSelectedIds.length <= 1 && currentSelected && !currentSelected.boxGroupId) {
         const handleTol = 11 / zoom;
         if (Math.hypot(world.x - currentSelected.start.x, world.y - currentSelected.start.y) <= handleTol) {
           setDragState({
@@ -654,8 +664,24 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         if (!parentBeam) continue;
         const poly = getPlacedPanelPolygon(p, parentBeam, pixelsPerCm);
         if (isPointInOrNearPolygon(world, poly, panelHitTol)) {
+          if (isShift) {
+            onSelectBeam(parentBeam.id, true);
+            return;
+          }
+          if (effectiveSelectedIds.includes(parentBeam.id) && effectiveSelectedIds.length > 1) {
+            setDragState({
+              beamId: parentBeam.id,
+              mode: 'move_multi',
+              multiBeamIds: effectiveSelectedIds,
+              startMouse: world,
+              origStart: { ...parentBeam.start },
+              origEnd: { ...parentBeam.end },
+              hasMoved: false,
+            });
+            return;
+          }
           setSelectedPanelId(p.id);
-          onSelectBeam(parentBeam.id);
+          onSelectBeam(parentBeam.id, false);
           setDragState({
             beamId: parentBeam.id,
             boxGroupId: parentBeam.boxGroupId,
@@ -683,8 +709,24 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       }
 
       if (foundBeam) {
+        if (isShift) {
+          onSelectBeam(foundBeam.id, true);
+          return;
+        }
+        if (effectiveSelectedIds.includes(foundBeam.id) && effectiveSelectedIds.length > 1) {
+          setDragState({
+            beamId: foundBeam.id,
+            mode: 'move_multi',
+            multiBeamIds: effectiveSelectedIds,
+            startMouse: world,
+            origStart: { ...foundBeam.start },
+            origEnd: { ...foundBeam.end },
+            hasMoved: false,
+          });
+          return;
+        }
         setSelectedPanelId(null);
-        onSelectBeam(foundBeam.id);
+        onSelectBeam(foundBeam.id, false);
         setDragState({
           beamId: foundBeam.id,
           boxGroupId: foundBeam.boxGroupId,
@@ -698,8 +740,10 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       }
 
       // Clicked empty space -> clear selection
-      setSelectedPanelId(null);
-      onSelectBeam(null);
+      if (!isShift) {
+        setSelectedPanelId(null);
+        onSelectBeam(null, false);
+      }
     }
 
     // Default: Start Panning
@@ -735,6 +779,8 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       if (dragState.mode === 'resize_box_corner' && onResizeBoxGroup && dragState.anchorPt && dragState.boxGroupId) {
         const cornerPt = nearestSnap ? { x: nearestSnap.x, y: nearestSnap.y } : rawWorld;
         onResizeBoxGroup(dragState.boxGroupId, dragState.anchorPt, cornerPt, false);
+      } else if (dragState.mode === 'move_multi' && onBatchMoveBeams && dragState.multiBeamIds) {
+        onBatchMoveBeams(dragState.multiBeamIds, dx, dy, false);
       } else if (dragState.mode === 'move_box' && onMoveBoxGroup && dragState.boxGroupId) {
         onMoveBoxGroup(dragState.boxGroupId, dx, dy, false);
       } else if (dragState.mode === 'move_beam' && onMoveBeam) {
@@ -790,6 +836,10 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         if (dragState.mode === 'resize_box_corner' && onResizeBoxGroup && dragState.anchorPt && dragState.boxGroupId) {
           const cornerPt = activeSnap ? { x: activeSnap.x, y: activeSnap.y } : currentMousePos || { x: 0, y: 0 };
           onResizeBoxGroup(dragState.boxGroupId, dragState.anchorPt, cornerPt, true);
+        } else if (dragState.mode === 'move_multi' && onBatchMoveBeams && dragState.multiBeamIds) {
+          const dx = currentMousePos ? currentMousePos.x - dragState.startMouse.x : 0;
+          const dy = currentMousePos ? currentMousePos.y - dragState.startMouse.y : 0;
+          onBatchMoveBeams(dragState.multiBeamIds, dx, dy, true);
         } else if (dragState.mode === 'move_box' && onMoveBoxGroup && dragState.boxGroupId) {
           const dx = currentMousePos ? currentMousePos.x - dragState.startMouse.x : 0;
           const dy = currentMousePos ? currentMousePos.y - dragState.startMouse.y : 0;
@@ -849,7 +899,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   };
 
   const bannerText = getToolBannerText();
-  const selectedBeamObj = beams.find((b) => b.id === selectedBeamId) || null;
+  const selectedBeamObj = beams.find((b) => b.id === primarySelectedId) || null;
 
   return (
     <div
@@ -871,8 +921,34 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         }`}
       />
 
-      {/* Floating Selection Quick-Action Bar (Move Hint + Delete Button) */}
-      {selectedBeamObj && activeTool === 'select' && (
+      {/* Floating Selection Quick-Action Bar */}
+      {effectiveSelectedIds.length > 1 && activeTool === 'select' && (
+        <div className="absolute top-4 right-4 bg-white/95 backdrop-blur-xs px-3 py-2 rounded-xl border border-blue-300 shadow-md flex items-center gap-3">
+          <div className="flex items-center gap-1.5 text-xs">
+            <Move className="w-3.5 h-3.5 text-blue-600" />
+            <span className="font-bold text-blue-950">
+              เลือก {effectiveSelectedIds.length} เส้นพร้อมกัน
+            </span>
+            <span className="text-[11px] text-slate-500 hidden sm:inline">
+              • ลากเส้นเพื่อขยับพร้อมกัน หรือกด Delete เพื่อลบทั้งชุด
+            </span>
+          </div>
+          {onDeleteBeam && (
+            <button
+              onClick={() => {
+                effectiveSelectedIds.forEach((id) => onDeleteBeam(id));
+              }}
+              title="ลบไม้แบบที่เลือกทั้งหมด (หรือกด Delete บนคีย์บอร์ด)"
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100 transition-colors cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>ลบทั้งหมด ({effectiveSelectedIds.length})</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {effectiveSelectedIds.length === 1 && selectedBeamObj && activeTool === 'select' && (
         <div className="absolute top-4 right-4 bg-white/95 backdrop-blur-xs px-3 py-2 rounded-xl border border-blue-200 shadow-md flex items-center gap-3">
           <div className="flex items-center gap-1.5 text-xs">
             <Move className="w-3.5 h-3.5 text-blue-600" />
