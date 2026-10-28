@@ -30,7 +30,7 @@ describe('scaleCalibrator & beamDetector', () => {
     expect(result.pixelsPerCm).toBeCloseTo(1.5, 2);
   });
 
-  it('detects parallel horizontal and vertical vector line pairs as beams with 5cm formwork thickness', () => {
+  it('detects parallel horizontal and vertical vector line pairs as individual formwork sides (ไม้แบบแต่ละด้าน) with 5cm formwork thickness', () => {
     const lines: RawVectorLine[] = [
       // Horizontal beam pair, 20 px apart (20 cm at 1 px/cm), 350 px long
       { x1: 100, y1: 100, x2: 450, y2: 100 },
@@ -40,12 +40,14 @@ describe('scaleCalibrator & beamDetector', () => {
       { x1: 120, y1: 120, x2: 120, y2: 420 },
     ];
     const detected = autoDetectBeamsFromVectorLines(lines, 1.0, 50);
-    expect(detected.length).toBe(2);
-    expect(detected[0].thicknessCm).toBe(5);
-    expect(detected[0].defaultHeightCm).toBe(50);
+    // 2 beams x 2 sides each = 4 individual single_edge formwork sides
+    expect(detected.length).toBe(4);
+    expect(detected.every((s) => s.attachMode === 'single_edge')).toBe(true);
+    expect(detected.every((s) => s.thicknessCm === 5)).toBe(true);
+    expect(detected.every((s) => s.defaultHeightCm === 50)).toBe(true);
   });
 
-  it('classifies and filters out paper border frames, title blocks, dashed grid lines, and dimension lines while detecting only real beams', () => {
+  it('classifies and filters out paper border frames, title blocks, dashed grid lines, and dimension lines while detecting only real beam formwork sides', () => {
     const pageDimensions = { width: 1200, height: 900 };
     const lines: RawVectorLine[] = [
       // 1. Double-line paper border frame near sheet margins (should be border_or_titleblock)
@@ -84,10 +86,15 @@ describe('scaleCalibrator & beamDetector', () => {
     expect(classified.filter((c) => c.category === 'grid_or_dimension').length).toBeGreaterThanOrEqual(6);
 
     const diag = autoDetectBeamsWithDiagnostics(lines, 1.0, 60, texts, pageDimensions);
-    expect(diag.beams.length).toBe(1);
-    expect(diag.beams[0].name).toBe('B1');
-    expect(diag.beams[0].start).toEqual({ x: 200, y: 300 });
-    expect(diag.beams[0].end).toEqual({ x: 600, y: 300 });
+    // B1 creates 2 independent single_edge formwork sides: B1-บน (y=290) and B1-ล่าง (y=310)
+    expect(diag.beams.length).toBe(2);
+    expect(diag.beams.every((b) => b.attachMode === 'single_edge')).toBe(true);
+    expect(diag.beams[0].name).toBe('B1-บน');
+    expect(diag.beams[0].start).toEqual({ x: 200, y: 290 });
+    expect(diag.beams[0].end).toEqual({ x: 600, y: 290 });
+    expect(diag.beams[1].name).toBe('B1-ล่าง');
+    expect(diag.beams[1].start).toEqual({ x: 200, y: 310 });
+    expect(diag.beams[1].end).toEqual({ x: 600, y: 310 });
     expect(diag.counts.horizontalGrids).toBeGreaterThanOrEqual(1);
     expect(diag.counts.gridGuidedBeams).toBe(1);
   });
@@ -132,11 +139,11 @@ describe('scaleCalibrator & beamDetector', () => {
     const diag = autoDetectBeamsWithDiagnostics(lines, 1.0, 60, texts, pageDimensions);
     expect(diag.counts.horizontalGrids).toBeGreaterThanOrEqual(2);
     expect(diag.counts.verticalGrids).toBeGreaterThanOrEqual(2);
-    expect(diag.beams.length).toBe(4);
     expect(diag.counts.gridGuidedBeams).toBe(4);
+    expect(diag.beams.every((b) => b.attachMode === 'single_edge')).toBe(true);
 
-    const names = diag.beams.map((b) => b.name).sort();
-    expect(names).toEqual(['B1', 'B2', 'B3', 'B4']);
+    const baseNames = Array.from(new Set(diag.beams.map((b) => b.name.split('-')[0]))).sort();
+    expect(baseNames).toEqual(['B1', 'B2', 'B3', 'B4']);
   });
 
   it('generates a realistic sample beam plan with multiple heights (40, 50, 60, 70 cm)', () => {

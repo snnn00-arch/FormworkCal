@@ -3,7 +3,6 @@ import {
   BeamElement,
   FORMWORK_HEIGHTS,
   FORMWORK_THICKNESS_CM,
-  FormworkHeight,
   getSkuTheme,
   RentalSummaryReport,
   STANDARD_LENGTHS,
@@ -305,43 +304,25 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                   </button>
                 </div>
 
-                {/* Beam Name & Width */}
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[11px] font-medium text-slate-500 block mb-1">
-                      ชื่อคาน
-                    </label>
-                    <input
-                      type="text"
-                      value={selectedBeam.name}
-                      onChange={(e) =>
-                        onUpdateBeam({ ...selectedBeam, name: e.target.value })
-                      }
-                      className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white font-semibold text-slate-800"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-medium text-slate-500 block mb-1">
-                      ความกว้างคาน (ซม.)
-                    </label>
-                    <input
-                      type="number"
-                      value={selectedBeam.widthCm}
-                      onChange={(e) =>
-                        onUpdateBeam({
-                          ...selectedBeam,
-                          widthCm: Math.max(10, Number(e.target.value)),
-                        })
-                      }
-                      className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white font-semibold text-slate-800"
-                    />
-                  </div>
+                {/* Formwork Side Name */}
+                <div>
+                  <label className="text-[11px] font-medium text-slate-500 block mb-1">
+                    ชื่อด้านไม้แบบ
+                  </label>
+                  <input
+                    type="text"
+                    value={selectedBeam.name}
+                    onChange={(e) =>
+                      onUpdateBeam({ ...selectedBeam, name: e.target.value })
+                    }
+                    className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white font-semibold text-slate-800"
+                  />
                 </div>
 
-                {/* Batch Set Both Sides Height */}
+                {/* Set Formwork Height */}
                 <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
                   <span className="text-[11px] font-semibold text-slate-600 block mb-1.5">
-                    ปรับความสูงไม้แบบ (ทั้งสองฝั่ง):
+                    ปรับความสูงไม้แบบด้านนี้:
                   </span>
                   <div className="grid grid-cols-4 gap-1.5">
                     {FORMWORK_HEIGHTS.map((h) => (
@@ -369,186 +350,128 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                   </div>
                 </div>
 
-                {/* Single-Edge Mode Quick Flip Side Button */}
-                {selectedBeam.attachMode === 'single_edge' && (
-                  <div className="bg-indigo-50/70 border border-indigo-200 rounded-lg p-2.5 flex items-center justify-between">
-                    <div>
-                      <span className="text-[11px] font-bold text-indigo-900 block">
-                        โหมดเกาะเส้นเดี่ยว ({selectedBeam.edgeRole === 'outer' ? 'เส้นขอบนอก' : 'เส้นขอบใน'})
-                      </span>
-                      <span className="text-[10px] text-indigo-700">
-                        ไม้แบบหนา 5 ซม. เกาะที่ฝั่ง{selectedBeam.leftSide.enabled !== false ? 'ซ้าย' : 'ขวา'}ของเส้น
-                      </span>
+                {/* Single-Edge Mode Quick Flip Side + Corner Extensions */}
+                {selectedBeam.attachMode === 'single_edge' ? (
+                  <div className="space-y-3">
+                    <div className="bg-indigo-50/70 border border-indigo-200 rounded-lg p-2.5 flex items-center justify-between">
+                      <div>
+                        <span className="text-[11px] font-bold text-indigo-900 block">
+                          ไม้แบบด้านเดี่ยว ({selectedBeam.edgeRole === 'outer' ? 'ด้านนอก' : 'ด้านใน'})
+                        </span>
+                        <span className="text-[10px] text-indigo-700">
+                          ไม้แบบหนา 5 ซม. เกาะที่ฝั่ง{selectedBeam.leftSide.enabled !== false ? 'ซ้าย' : 'ขวา'}ของเส้น
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => {
+                          const leftWasActive = selectedBeam.leftSide.enabled !== false;
+                          onUpdateBeam({
+                            ...selectedBeam,
+                            leftSide: {
+                              ...selectedBeam.leftSide,
+                              enabled: !leftWasActive,
+                            },
+                            rightSide: {
+                              ...selectedBeam.rightSide,
+                              enabled: leftWasActive,
+                            },
+                          });
+                        }}
+                        className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-[11px] shadow-2xs transition-colors"
+                      >
+                        สลับฝั่งเกาะ (Flip)
+                      </button>
                     </div>
-                    <button
-                      onClick={() => {
-                        const leftWasActive = selectedBeam.leftSide.enabled !== false;
-                        onUpdateBeam({
-                          ...selectedBeam,
-                          leftSide: {
-                            ...selectedBeam.leftSide,
-                            enabled: !leftWasActive,
-                          },
-                          rightSide: {
-                            ...selectedBeam.rightSide,
-                            enabled: leftWasActive,
-                          },
-                        });
-                      }}
-                      className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-[11px] shadow-2xs transition-colors"
-                    >
-                      สลับฝั่งเกาะ (Flip)
-                    </button>
+
+                    {/* Active Side Corner Extension Toggles */}
+                    <div className="border border-slate-200 rounded-lg p-3 space-y-2 bg-white">
+                      <span className="font-bold text-slate-800 block text-xs">
+                        การอมมุมปลายไม้แบบด้านนี้
+                      </span>
+                      <div className="flex items-center justify-between pt-1 text-[11px] text-slate-600">
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={
+                              (selectedBeam.leftSide.enabled !== false
+                                ? selectedBeam.leftSide.startExtensionCm
+                                : selectedBeam.rightSide.startExtensionCm) > 0
+                            }
+                            onChange={(e) => {
+                              const ext = e.target.checked ? FORMWORK_THICKNESS_CM : 0;
+                              onUpdateBeam({
+                                ...selectedBeam,
+                                leftSide: {
+                                  ...selectedBeam.leftSide,
+                                  startExtensionCm:
+                                    selectedBeam.leftSide.enabled !== false ? ext : 0,
+                                  customPanels: undefined,
+                                },
+                                rightSide: {
+                                  ...selectedBeam.rightSide,
+                                  startExtensionCm:
+                                    selectedBeam.rightSide.enabled !== false ? ext : 0,
+                                  customPanels: undefined,
+                                },
+                              });
+                            }}
+                          />
+                          <span>อมมุมต้นเส้น (+5 ซม.)</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={
+                              (selectedBeam.leftSide.enabled !== false
+                                ? selectedBeam.leftSide.endExtensionCm
+                                : selectedBeam.rightSide.endExtensionCm) > 0
+                            }
+                            onChange={(e) => {
+                              const ext = e.target.checked ? FORMWORK_THICKNESS_CM : 0;
+                              onUpdateBeam({
+                                ...selectedBeam,
+                                leftSide: {
+                                  ...selectedBeam.leftSide,
+                                  endExtensionCm:
+                                    selectedBeam.leftSide.enabled !== false ? ext : 0,
+                                  customPanels: undefined,
+                                },
+                                rightSide: {
+                                  ...selectedBeam.rightSide,
+                                  endExtensionCm:
+                                    selectedBeam.rightSide.enabled !== false ? ext : 0,
+                                  customPanels: undefined,
+                                },
+                              });
+                            }}
+                          />
+                          <span>อมมุมท้ายเส้น (+5 ซม.)</span>
+                        </label>
+                      </div>
+                    </div>
                   </div>
+                ) : (
+                  <>
+                    {/* Legacy Dual-Side fallback */}
+                    <div className="border border-slate-200 rounded-lg p-3 space-y-2 bg-white">
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-1.5 font-bold text-slate-800 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selectedBeam.leftSide.enabled !== false}
+                            onChange={(e) =>
+                              onUpdateBeam({
+                                ...selectedBeam,
+                                leftSide: { ...selectedBeam.leftSide, enabled: e.target.checked },
+                              })
+                            }
+                          />
+                          <span>ฝั่งซ้าย (Left Side)</span>
+                        </label>
+                      </div>
+                    </div>
+                  </>
                 )}
-
-                {/* Left Side Config */}
-                <div className="border border-slate-200 rounded-lg p-3 space-y-2 bg-white">
-                  <div className="flex items-center justify-between">
-                    <label className="flex items-center gap-1.5 font-bold text-slate-800 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedBeam.leftSide.enabled !== false}
-                        onChange={(e) =>
-                          onUpdateBeam({
-                            ...selectedBeam,
-                            leftSide: { ...selectedBeam.leftSide, enabled: e.target.checked },
-                          })
-                        }
-                      />
-                      <span>ฝั่งซ้าย (Left Side)</span>
-                    </label>
-                    <select
-                      value={selectedBeam.leftSide.heightCm}
-                      onChange={(e) => {
-                        const h = Number(e.target.value) as FormworkHeight;
-                        onUpdateBeam({
-                          ...selectedBeam,
-                          leftSide: { ...selectedBeam.leftSide, heightCm: h, customPanels: undefined },
-                        });
-                      }}
-                      className="border border-slate-200 rounded px-1.5 py-0.5 font-semibold text-xs"
-                    >
-                      {FORMWORK_HEIGHTS.map((h) => (
-                        <option key={h} value={h}>
-                          สูง {h} ซม.
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Corner extension toggles */}
-                  <div className="flex items-center justify-between pt-1 text-[11px] text-slate-600">
-                    <label className="flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedBeam.leftSide.startExtensionCm > 0}
-                        onChange={(e) =>
-                          onUpdateBeam({
-                            ...selectedBeam,
-                            leftSide: {
-                              ...selectedBeam.leftSide,
-                              startExtensionCm: e.target.checked ? FORMWORK_THICKNESS_CM : 0,
-                              customPanels: undefined,
-                            },
-                          })
-                        }
-                      />
-                      <span>อมมุมต้นคาน (+5 ซม.)</span>
-                    </label>
-                    <label className="flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedBeam.leftSide.endExtensionCm > 0}
-                        onChange={(e) =>
-                          onUpdateBeam({
-                            ...selectedBeam,
-                            leftSide: {
-                              ...selectedBeam.leftSide,
-                              endExtensionCm: e.target.checked ? FORMWORK_THICKNESS_CM : 0,
-                              customPanels: undefined,
-                            },
-                          })
-                        }
-                      />
-                      <span>อมมุมท้ายคาน (+5 ซม.)</span>
-                    </label>
-                  </div>
-                </div>
-
-                {/* Right Side Config */}
-                <div className="border border-slate-200 rounded-lg p-3 space-y-2 bg-white">
-                  <div className="flex items-center justify-between">
-                    <label className="flex items-center gap-1.5 font-bold text-slate-800 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedBeam.rightSide.enabled !== false}
-                        onChange={(e) =>
-                          onUpdateBeam({
-                            ...selectedBeam,
-                            rightSide: { ...selectedBeam.rightSide, enabled: e.target.checked },
-                          })
-                        }
-                      />
-                      <span>ฝั่งขวา (Right Side)</span>
-                    </label>
-                    <select
-                      value={selectedBeam.rightSide.heightCm}
-                      onChange={(e) => {
-                        const h = Number(e.target.value) as FormworkHeight;
-                        onUpdateBeam({
-                          ...selectedBeam,
-                          rightSide: { ...selectedBeam.rightSide, heightCm: h, customPanels: undefined },
-                        });
-                      }}
-                      className="border border-slate-200 rounded px-1.5 py-0.5 font-semibold text-xs"
-                    >
-                      {FORMWORK_HEIGHTS.map((h) => (
-                        <option key={h} value={h}>
-                          สูง {h} ซม.
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Corner extension toggles */}
-                  <div className="flex items-center justify-between pt-1 text-[11px] text-slate-600">
-                    <label className="flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedBeam.rightSide.startExtensionCm > 0}
-                        onChange={(e) =>
-                          onUpdateBeam({
-                            ...selectedBeam,
-                            rightSide: {
-                              ...selectedBeam.rightSide,
-                              startExtensionCm: e.target.checked ? FORMWORK_THICKNESS_CM : 0,
-                              customPanels: undefined,
-                            },
-                          })
-                        }
-                      />
-                      <span>อมมุมต้นคาน (+5 ซม.)</span>
-                    </label>
-                    <label className="flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedBeam.rightSide.endExtensionCm > 0}
-                        onChange={(e) =>
-                          onUpdateBeam({
-                            ...selectedBeam,
-                            rightSide: {
-                              ...selectedBeam.rightSide,
-                              endExtensionCm: e.target.checked ? FORMWORK_THICKNESS_CM : 0,
-                              customPanels: undefined,
-                            },
-                          })
-                        }
-                      />
-                      <span>อมมุมท้ายคาน (+5 ซม.)</span>
-                    </label>
-                  </div>
-                </div>
 
                 {/* Reset Auto button */}
                 <button

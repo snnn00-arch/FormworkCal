@@ -246,34 +246,59 @@ export function applyAutoCornerExtensions(
       const rightActive = beam.rightSide.enabled !== false;
       const activeSign = leftActive ? 1 : -1;
 
+      const cornerTol = Math.max(8, 12 * safeScale);
       const computeSingleEdgeCornerExt = (pt: Point, currentExt: number): number => {
-        const partner = deduplicated.find((other) => {
-          if (other.id === beam.id) return false;
-          if (beam.edgeRole && other.edgeRole && beam.edgeRole !== other.edgeRole) return false;
+        let bestPartner: BeamElement | null = null;
+        let bestDist = Infinity;
+
+        for (const other of deduplicated) {
+          if (other.id === beam.id) continue;
           const oDx = other.end.x - other.start.x;
           const oDy = other.end.y - other.start.y;
           const otherIsH = Math.abs(oDx) >= Math.abs(oDy);
-          if (otherIsH === isHorizontal) return false;
-          return pointToSegmentDist(pt, other.start, other.end) <= snapThresholdPx;
-        });
+          if (otherIsH === isHorizontal) continue;
 
-        if (!partner) {
+          const d = pointToSegmentDist(pt, other.start, other.end);
+          if (d <= cornerTol && d < bestDist) {
+            bestDist = d;
+            bestPartner = other;
+          }
+        }
+
+        if (!bestPartner) {
           return currentExt;
         }
 
-        const oMid = {
-          x: (partner.start.x + partner.end.x) / 2,
-          y: (partner.start.y + partner.end.y) / 2,
-        };
+        const distStart = Math.hypot(pt.x - bestPartner.start.x, pt.y - bestPartner.start.y);
+        const distEnd = Math.hypot(pt.x - bestPartner.end.x, pt.y - bestPartner.end.y);
+
+        // If pt lands in the middle/interior of bestPartner (T-junction against a continuous formwork line)
+        if (distStart > cornerTol && distEnd > cornerTol) {
+          const pDx = bestPartner.end.x - bestPartner.start.x;
+          const pDy = bestPartner.end.y - bestPartner.start.y;
+          const pLen = Math.hypot(pDx, pDy) || 1;
+          const pNx = -pDy / pLen;
+          const pNy = pDx / pLen;
+          const pSign = bestPartner.leftSide.enabled !== false ? 1 : -1;
+          const bMid = {
+            x: (beam.start.x + beam.end.x) / 2,
+            y: (beam.start.y + beam.end.y) / 2,
+          };
+          const dotPartnerN =
+            (bMid.x - pt.x) * (pNx * pSign) + (bMid.y - pt.y) * (pNy * pSign);
+          return dotPartnerN > 0 ? -FORMWORK_THICKNESS_CM : 0;
+        }
+
+        const farPt = distStart <= distEnd ? bestPartner.end : bestPartner.start;
         const dotActiveN =
-          (oMid.x - pt.x) * (nx * activeSign) + (oMid.y - pt.y) * (ny * activeSign);
+          (farPt.x - pt.x) * (nx * activeSign) + (farPt.y - pt.y) * (ny * activeSign);
 
         if (dotActiveN > 0) {
-          // Formwork is on the INSIDE of the corner (e.g., ตีกรอบวงนอก where formwork stays inside the drawn box, or ตีกรอบวงใน inner loop)
+          // Formwork is on the INSIDE of the corner (e.g., ตีกรอบวงนอก where formwork stays inside the drawn box, or inner corner)
           // Never overshoot the corner (0 for horizontal, -5cm for vertical so corners never overlap and never leave the drawn box!)
           return isHorizontal ? 0 : -FORMWORK_THICKNESS_CM;
         } else {
-          // Formwork is on the OUTSIDE of the corner (e.g., expanded +20cm outer ring of ตีกรอบวงใน)
+          // Formwork is on the OUTSIDE of the corner (e.g., outer corner wrap)
           return isHorizontal ? FORMWORK_THICKNESS_CM : 0;
         }
       };

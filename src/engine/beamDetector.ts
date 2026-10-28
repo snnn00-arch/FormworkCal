@@ -1475,14 +1475,256 @@ export function autoDetectBeamsWithDiagnostics(
     }
   }
 
-  const cleanBeams = applyAutoCornerExtensions(beams, safeScale);
-  counts.detectedBeams = cleanBeams.length;
+  // =========================================================================
+  // PASS 5: Convert Detected Structural Spans into Individual Formwork Sides (ไม้แบบแต่ละด้าน)
+  // Abolishes the 2-sided beam object ("คาน") in output: creates independent single_edge
+  // formwork lines for each side (บน, ล่าง, ซ้าย, ขวา) and carves out T-junction / Cross-junction
+  // openings so formwork never covers intersecting secondary beams (คานซอย).
+  // =========================================================================
+  const formworkSides = convertDetectedBeamsToFormworkSides(beams, safeScale);
+  const cleanSides = applyAutoCornerExtensions(formworkSides, safeScale);
+  counts.detectedBeams = cleanSides.length;
   return {
-    beams: cleanBeams,
+    beams: cleanSides,
     classifiedLines,
     gridAxes,
     counts,
   };
+}
+
+function subtractLinearIntervals(
+  start: number,
+  end: number,
+  cutouts: Array<{ start: number; end: number }>,
+  minSegLen: number
+): Array<{ start: number; end: number }> {
+  let segments: Array<{ start: number; end: number }> = [{ start, end }];
+  for (const cut of cutouts) {
+    const next: Array<{ start: number; end: number }> = [];
+    for (const seg of segments) {
+      if (cut.end <= seg.start + 0.5 || cut.start >= seg.end - 0.5) {
+        next.push(seg);
+      } else {
+        if (cut.start - seg.start >= minSegLen) {
+          next.push({ start: seg.start, end: cut.start });
+        }
+        if (seg.end - cut.end >= minSegLen) {
+          next.push({ start: cut.end, end: seg.end });
+        }
+      }
+    }
+    segments = next;
+  }
+  return segments.filter((s) => s.end - s.start >= minSegLen);
+}
+
+/**
+ * Splits each detected beam span into independent single_edge formwork sides (ไม้แบบแต่ละด้าน: บน/ล่าง or ซ้าย/ขวา)
+ * and automatically carves out perpendicular beam intersections (L-corners, T-junction คานซอย, Cross-junctions).
+ */
+export function convertDetectedBeamsToFormworkSides(
+  rawBeams: BeamElement[],
+  safeScale: number
+): BeamElement[] {
+  const sides: BeamElement[] = [];
+  const tol = Math.max(20, 22 * safeScale);
+  const minSegLen = Math.max(12, 12 * safeScale);
+
+  for (const b of rawBeams) {
+    const isH = Math.abs(b.end.x - b.start.x) >= Math.abs(b.end.y - b.start.y);
+    const widthCm = b.widthCm || DEFAULT_BEAM_WIDTH_CM;
+    const halfW = (widthCm * safeScale) / 2;
+
+    if (isH) {
+      const bY = (b.start.y + b.end.y) / 2;
+      const bMinX = Math.min(b.start.x, b.end.x);
+      const bMaxX = Math.max(b.start.x, b.end.x);
+      const topY = bY - halfW;
+      const botY = bY + halfW;
+
+      let topStartX = bMinX;
+      let topEndX = bMaxX;
+      const topCutouts: Array<{ start: number; end: number }> = [];
+
+      let botStartX = bMinX;
+      let botEndX = bMaxX;
+      const botCutouts: Array<{ start: number; end: number }> = [];
+
+      for (const other of rawBeams) {
+        if (other.id === b.id) continue;
+        const otherIsH = Math.abs(other.end.x - other.start.x) >= Math.abs(other.end.y - other.start.y);
+        if (otherIsH) continue;
+
+        const oX = (other.start.x + other.end.x) / 2;
+        const oMinY = Math.min(other.start.y, other.end.y);
+        const oMaxY = Math.max(other.start.y, other.end.y);
+        const oHalfW = ((other.widthCm || DEFAULT_BEAM_WIDTH_CM) * safeScale) / 2;
+
+        if (
+          oX >= bMinX - oHalfW - tol &&
+          oX <= bMaxX + oHalfW + tol &&
+          bY >= oMinY - halfW - tol &&
+          bY <= oMaxY + halfW + tol
+        ) {
+          const goesUp = oMinY < bY - tol * 0.25;
+          const goesDown = oMaxY > bY + tol * 0.25;
+
+          if (goesUp) {
+            topCutouts.push({ start: oX - oHalfW, end: oX + oHalfW });
+          } else {
+            if (Math.abs(oX - bMinX) <= oHalfW + tol) {
+              topStartX = Math.min(topStartX, oX - oHalfW);
+            }
+            if (Math.abs(oX - bMaxX) <= oHalfW + tol) {
+              topEndX = Math.max(topEndX, oX + oHalfW);
+            }
+          }
+
+          if (goesDown) {
+            botCutouts.push({ start: oX - oHalfW, end: oX + oHalfW });
+          } else {
+            if (Math.abs(oX - bMinX) <= oHalfW + tol) {
+              botStartX = Math.min(botStartX, oX - oHalfW);
+            }
+            if (Math.abs(oX - bMaxX) <= oHalfW + tol) {
+              botEndX = Math.max(botEndX, oX + oHalfW);
+            }
+          }
+        }
+      }
+
+      const topSegs = subtractLinearIntervals(topStartX, topEndX, topCutouts, minSegLen);
+      topSegs.forEach((seg, idx) => {
+        const suffix = topSegs.length > 1 ? `-บน(${idx + 1})` : `-บน`;
+        sides.push(
+          createFormworkEdgeElement(
+            `${b.name}${suffix}`,
+            { x: seg.start, y: topY },
+            { x: seg.end, y: topY },
+            'right',
+            b.defaultHeightCm,
+            'outer',
+            widthCm,
+            0,
+            0
+          )
+        );
+      });
+
+      const botSegs = subtractLinearIntervals(botStartX, botEndX, botCutouts, minSegLen);
+      botSegs.forEach((seg, idx) => {
+        const suffix = botSegs.length > 1 ? `-ล่าง(${idx + 1})` : `-ล่าง`;
+        sides.push(
+          createFormworkEdgeElement(
+            `${b.name}${suffix}`,
+            { x: seg.start, y: botY },
+            { x: seg.end, y: botY },
+            'left',
+            b.defaultHeightCm,
+            'inner',
+            widthCm,
+            0,
+            0
+          )
+        );
+      });
+    } else {
+      const bX = (b.start.x + b.end.x) / 2;
+      const bMinY = Math.min(b.start.y, b.end.y);
+      const bMaxY = Math.max(b.start.y, b.end.y);
+      const leftX = bX - halfW;
+      const rightX = bX + halfW;
+
+      let leftStartY = bMinY;
+      let leftEndY = bMaxY;
+      const leftCutouts: Array<{ start: number; end: number }> = [];
+
+      let rightStartY = bMinY;
+      let rightEndY = bMaxY;
+      const rightCutouts: Array<{ start: number; end: number }> = [];
+
+      for (const other of rawBeams) {
+        if (other.id === b.id) continue;
+        const otherIsH = Math.abs(other.end.x - other.start.x) >= Math.abs(other.end.y - other.start.y);
+        if (!otherIsH) continue;
+
+        const oY = (other.start.y + other.end.y) / 2;
+        const oMinX = Math.min(other.start.x, other.end.x);
+        const oMaxX = Math.max(other.start.x, other.end.x);
+        const oHalfW = ((other.widthCm || DEFAULT_BEAM_WIDTH_CM) * safeScale) / 2;
+
+        if (
+          oY >= bMinY - oHalfW - tol &&
+          oY <= bMaxY + oHalfW + tol &&
+          bX >= oMinX - halfW - tol &&
+          bX <= oMaxX + halfW + tol
+        ) {
+          const goesLeft = oMinX < bX - tol * 0.25;
+          const goesRight = oMaxX > bX + tol * 0.25;
+
+          if (goesLeft) {
+            leftCutouts.push({ start: oY - oHalfW, end: oY + oHalfW });
+          } else {
+            if (Math.abs(oY - bMinY) <= oHalfW + tol) {
+              leftStartY = Math.min(leftStartY, oY - oHalfW);
+            }
+            if (Math.abs(oY - bMaxY) <= oHalfW + tol) {
+              leftEndY = Math.max(leftEndY, oY + oHalfW);
+            }
+          }
+
+          if (goesRight) {
+            rightCutouts.push({ start: oY - oHalfW, end: oY + oHalfW });
+          } else {
+            if (Math.abs(oY - bMinY) <= oHalfW + tol) {
+              rightStartY = Math.min(rightStartY, oY - oHalfW);
+            }
+            if (Math.abs(oY - bMaxY) <= oHalfW + tol) {
+              rightEndY = Math.max(rightEndY, oY + oHalfW);
+            }
+          }
+        }
+      }
+
+      const leftSegs = subtractLinearIntervals(leftStartY, leftEndY, leftCutouts, minSegLen);
+      leftSegs.forEach((seg, idx) => {
+        const suffix = leftSegs.length > 1 ? `-ซ้าย(${idx + 1})` : `-ซ้าย`;
+        sides.push(
+          createFormworkEdgeElement(
+            `${b.name}${suffix}`,
+            { x: leftX, y: seg.start },
+            { x: leftX, y: seg.end },
+            'left',
+            b.defaultHeightCm,
+            'outer',
+            widthCm,
+            0,
+            0
+          )
+        );
+      });
+
+      const rightSegs = subtractLinearIntervals(rightStartY, rightEndY, rightCutouts, minSegLen);
+      rightSegs.forEach((seg, idx) => {
+        const suffix = rightSegs.length > 1 ? `-ขวา(${idx + 1})` : `-ขวา`;
+        sides.push(
+          createFormworkEdgeElement(
+            `${b.name}${suffix}`,
+            { x: rightX, y: seg.start },
+            { x: rightX, y: seg.end },
+            'right',
+            b.defaultHeightCm,
+            'inner',
+            widthCm,
+            0,
+            0
+          )
+        );
+      });
+    }
+  }
+
+  return sides;
 }
 
 export interface SnapPoint {
