@@ -246,5 +246,6 @@ export interface FormworkProjectData {
   beams: BeamElement[];
   pdfDimensions?: { width: number; height: number };
   pdfImageUrl?: string | null;
+  vectorCircles?: { cx: number; cy: number; radius: number }[];
 }
 

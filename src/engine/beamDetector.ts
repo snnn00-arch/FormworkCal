@@ -7,7 +7,7 @@ import {
   Point,
 } from '../types/formwork';
 import { applyAutoCornerExtensions } from './formworkOptimizer';
-import { RawTextItem, RawVectorLine } from './scaleCalibrator';
+import { RawTextItem, RawVectorLine, RawVectorCircle } from './scaleCalibrator';
 
 let beamCounter = 1;
 
@@ -760,13 +760,187 @@ function mergeCollinearCandidateSegments(
 }
 
 /**
- * Extracts structural Grid Axes (X-grids and Y-grids) from classified grid lines,
- * grid bubble texts (A, B, C / 1, 2, 3), and symmetrical centerline clusters.
+ * Detects structural Grid Axes strictly from letters (A-Z) and numbers (1-99) inside circular bubbles
+ * positioned around the perimeter (Top, Bottom, Left, and Right) of the plan drawing.
+ */
+export function extractGridAxesFromPerimeterBubbles(
+  circles: RawVectorCircle[],
+  texts: RawTextItem[],
+  pageDimensions?: { width: number; height: number }
+): { horizontal: GridAxis[]; vertical: GridAxis[] } {
+  const pageW = pageDimensions?.width || (circles.length > 0 ? Math.max(...circles.map((c) => c.cx)) * 1.15 : 3000);
+  const pageH = pageDimensions?.height || (circles.length > 0 ? Math.max(...circles.map((c) => c.cy)) * 1.15 : 2000);
+
+  // 1. Find all candidate grid bubbles: circle enclosing a single/double letter or number
+  const candidateBubbles: { label: string; cx: number; cy: number; radius: number }[] = [];
+
+  for (const c of circles) {
+    if (c.radius < 6 || c.radius > 120) continue;
+
+    for (const t of texts) {
+      const clean = t.text.trim();
+      const match = clean.match(/^([A-Z]{1,2}|\d{1,2})$/i);
+      if (!match) continue;
+
+      const d = Math.hypot(t.x - c.cx, t.y - c.cy);
+      if (d <= c.radius * 1.35) {
+        candidateBubbles.push({
+          label: match[1].toUpperCase(),
+          cx: c.cx,
+          cy: c.cy,
+          radius: c.radius,
+        });
+        break;
+      }
+    }
+  }
+
+  if (candidateBubbles.length === 0) {
+    return { horizontal: [], vertical: [] };
+  }
+
+  // Filter by median bubble radius to reject tiny rebar dots or giant layout circles
+  const radii = candidateBubbles.map((b) => b.radius).sort((a, b) => a - b);
+  const medianRadius = radii[Math.floor(radii.length / 2)];
+  const validBubbles = candidateBubbles.filter(
+    (b) => b.radius >= medianRadius * 0.6 && b.radius <= medianRadius * 1.6
+  );
+
+  // 2. Cluster bubbles into Horizontal Rows (bubbles with similar cy)
+  // and Vertical Columns (bubbles with similar cx)
+  const coordTol = Math.max(25, medianRadius * 0.85);
+
+  const rowClusters: { cy: number; items: typeof validBubbles }[] = [];
+  for (const b of validBubbles) {
+    let found = false;
+    for (const r of rowClusters) {
+      if (Math.abs(r.cy - b.cy) <= coordTol) {
+        r.items.push(b);
+        r.cy = (r.cy * (r.items.length - 1) + b.cy) / r.items.length;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      rowClusters.push({ cy: b.cy, items: [b] });
+    }
+  }
+
+  const colClusters: { cx: number; items: typeof validBubbles }[] = [];
+  for (const b of validBubbles) {
+    let found = false;
+    for (const col of colClusters) {
+      if (Math.abs(col.cx - b.cx) <= coordTol) {
+        col.items.push(b);
+        col.cx = (col.cx * (col.items.length - 1) + b.cx) / col.items.length;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      colClusters.push({ cx: b.cx, items: [b] });
+    }
+  }
+
+  // A valid row/col of perimeter bubbles must have at least 2 bubbles
+  const validRows = rowClusters.filter((r) => r.items.length >= 2);
+  const validCols = colClusters.filter((c) => c.items.length >= 2);
+
+  const vertAxesMap = new Map<number, GridAxis>();
+  validRows.sort((a, b) => a.cy - b.cy);
+
+  for (const row of validRows) {
+    // Top perimeter (cy <= 40% of page) or Bottom perimeter (cy >= 60% of page)
+    if (row.cy <= pageH * 0.4 || row.cy >= pageH * 0.6) {
+      for (const b of row.items) {
+        const existingKey = Array.from(vertAxesMap.keys()).find(
+          (k) => Math.abs(k - b.cx) <= coordTol
+        );
+        if (existingKey !== undefined) {
+          const ex = vertAxesMap.get(existingKey)!;
+          if (!ex.label && b.label) ex.label = b.label;
+        } else {
+          vertAxesMap.set(b.cx, {
+            orientation: 'vertical',
+            coord: b.cx,
+            start: Math.min(row.cy, 0),
+            end: Math.max(row.cy, pageH),
+            label: b.label,
+          });
+        }
+      }
+    }
+  }
+
+  const horizAxesMap = new Map<number, GridAxis>();
+  validCols.sort((a, b) => a.cx - b.cx);
+
+  for (const col of validCols) {
+    // Left perimeter (cx <= 40% of page) or Right perimeter (cx >= 60% of page)
+    if (col.cx <= pageW * 0.4 || col.cx >= pageW * 0.6) {
+      for (const b of col.items) {
+        const existingKey = Array.from(horizAxesMap.keys()).find(
+          (k) => Math.abs(k - b.cy) <= coordTol
+        );
+        if (existingKey !== undefined) {
+          const ex = horizAxesMap.get(existingKey)!;
+          if (!ex.label && b.label) ex.label = b.label;
+        } else {
+          horizAxesMap.set(b.cy, {
+            orientation: 'horizontal',
+            coord: b.cy,
+            start: Math.min(col.cx, 0),
+            end: Math.max(col.cx, pageW),
+            label: b.label,
+          });
+        }
+      }
+    }
+  }
+
+  const vertical = Array.from(vertAxesMap.values()).sort((a, b) => a.coord - b.coord);
+  const horizontal = Array.from(horizAxesMap.values()).sort((a, b) => a.coord - b.coord);
+
+  return { horizontal, vertical };
+}
+
+/**
+ * Extracts structural Grid Axes (X-grids and Y-grids).
+ * - Priority: Circles enclosing numbers and English letters around the perimeter of the plan (Top, Bottom, Left, Right).
+ * - Fallback: Classified grid lines, symmetrical beam centerlines, and perimeter text labels.
  */
 export function extractGridAxes(
   classifiedLines: ClassifiedLine[],
-  texts: RawTextItem[] = []
+  texts: RawTextItem[] = [],
+  circles: RawVectorCircle[] = [],
+  pageDimensions?: { width: number; height: number }
 ): { horizontal: GridAxis[]; vertical: GridAxis[] } {
+  // 1. Primary: Perimeter Circle Bubbles (ตัวเลขและตัวหนังสืออังกฤษในวงกลมรอบแปลน บน/ล่าง/ซ้าย/ขวา)
+  if (circles.length > 0) {
+    const bubbleAxes = extractGridAxesFromPerimeterBubbles(circles, texts, pageDimensions);
+    if (bubbleAxes.horizontal.length > 0 || bubbleAxes.vertical.length > 0) {
+      // Connect / extend axis spans with any classified grid lines
+      for (const vg of bubbleAxes.vertical) {
+        for (const cl of classifiedLines) {
+          if (cl.orientation === 'vertical' && Math.abs(cl.coord - vg.coord) <= 15) {
+            vg.start = Math.min(vg.start, cl.start);
+            vg.end = Math.max(vg.end, cl.end);
+          }
+        }
+      }
+      for (const hg of bubbleAxes.horizontal) {
+        for (const cl of classifiedLines) {
+          if (cl.orientation === 'horizontal' && Math.abs(cl.coord - hg.coord) <= 15) {
+            hg.start = Math.min(hg.start, cl.start);
+            hg.end = Math.max(hg.end, cl.end);
+          }
+        }
+      }
+      return bubbleAxes;
+    }
+  }
+
+  // 2. Fallback when vector circles are unavailable (e.g. synthetic test fixtures)
   const horizMap: GridAxis[] = [];
   const vertMap: GridAxis[] = [];
 
@@ -789,7 +963,7 @@ export function extractGridAxes(
     }
   };
 
-  // 1. From lines explicitly classified as grid lines (dashed_grid_line, full_span_grid_line, or grid bubble lines)
+  // From lines explicitly classified as grid lines
   const gridLines = classifiedLines.filter(
     (l) =>
       l.category === 'grid_or_dimension' &&
@@ -806,7 +980,7 @@ export function extractGridAxes(
     }
   }
 
-  // 2. Also infer grid axes from symmetric pairs of beam candidates (since main beams sit on grid axes!)
+  // Infer grid axes from symmetric pairs of beam candidates
   const beamCandidates = classifiedLines.filter((l) => l.category === 'beam_candidate');
   for (let i = 0; i < beamCandidates.length; i++) {
     for (let j = i + 1; j < beamCandidates.length; j++) {
@@ -829,7 +1003,7 @@ export function extractGridAxes(
     }
   }
 
-  // 3. Attach Grid Bubble Labels (A, B, C / 1, 2, 3) if near the axis
+  // Attach Grid Bubble Labels (A, B, C / 1, 2, 3) if near the axis
   for (const txt of texts) {
     if (!isGridBubbleText(txt.text)) continue;
     for (const h of horizMap) {
@@ -1208,11 +1382,12 @@ export function autoDetectBeamsWithDiagnostics(
   pixelsPerCm: number,
   defaultHeightCm: FormworkHeight = 50,
   texts: RawTextItem[] = [],
-  pageDimensions?: { width: number; height: number }
+  pageDimensions?: { width: number; height: number },
+  circles: RawVectorCircle[] = []
 ): BeamDetectionDiagnostics {
   const safeScale = pixelsPerCm > 0 ? pixelsPerCm : 1;
   const classifiedLines = classifyPlanLines(lines, texts, pageDimensions);
-  const gridAxes = extractGridAxes(classifiedLines, texts);
+  const gridAxes = extractGridAxes(classifiedLines, texts, circles, pageDimensions);
 
   // Merge collinear candidate segments that were broken by column/grid intersections
   const rawCandidates = classifiedLines.filter((l) => l.category === 'beam_candidate');
@@ -2138,7 +2313,8 @@ export function extractColumnSnapPoints(
   beams: BeamElement[],
   pixelsPerCm: number,
   beamWidthCm: number = DEFAULT_BEAM_WIDTH_CM,
-  pageDimensions?: { width: number; height: number }
+  pageDimensions?: { width: number; height: number },
+  circles: RawVectorCircle[] = []
 ): SnapPoint[] {
   const safeScale = pixelsPerCm > 0 ? pixelsPerCm : 1;
   const halfW = (beamWidthCm * safeScale) / 2;
@@ -2146,7 +2322,7 @@ export function extractColumnSnapPoints(
 
   if (lines.length > 0) {
     const classified = classifyPlanLines(lines, texts, pageDimensions);
-    const grids = extractGridAxes(classified, texts);
+    const grids = extractGridAxes(classified, texts, circles, pageDimensions);
     const gridIntersections = extractGridIntersections(grids);
 
     // 0. High-Priority Grid Intersections (จุดตัดแกนกริดหลัก เช่น A-1, B-2)

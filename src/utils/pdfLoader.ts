@@ -1,10 +1,11 @@
-import { RawTextItem, RawVectorLine } from '../engine/scaleCalibrator';
+import { RawTextItem, RawVectorCircle, RawVectorLine } from '../engine/scaleCalibrator';
 
 export interface LoadedPdfPlan {
   imageDataUrl: string;
   width: number;
   height: number;
   vectorLines: RawVectorLine[];
+  vectorCircles: RawVectorCircle[];
   texts: RawTextItem[];
 }
 
@@ -211,6 +212,86 @@ export async function inspectPdfPages(file: File): Promise<{
   return { totalPages, pages };
 }
 
+function applyTransform(ctm: number[], x: number, y: number): [number, number] {
+  return [
+    ctm[0] * x + ctm[2] * y + ctm[4],
+    ctm[1] * x + ctm[3] * y + ctm[5],
+  ];
+}
+
+function multiplyMatrix(m1: number[], m2: number[]): number[] {
+  return [
+    m1[0] * m2[0] + m1[2] * m2[1],
+    m1[1] * m2[0] + m1[3] * m2[1],
+    m1[0] * m2[2] + m1[2] * m2[3],
+    m1[1] * m2[2] + m1[3] * m2[3],
+    m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+    m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
+  ];
+}
+
+export function extractCirclesFromOperatorList(
+  ops: { fnArray: number[]; argsArray: any[] },
+  viewport: any,
+  OPS: any
+): RawVectorCircle[] {
+  const constructPathOp = OPS.constructPath;
+  const transformOp = OPS.transform;
+  const saveOp = OPS.save;
+  const restoreOp = OPS.restore;
+
+  const ctmStack: number[][] = [];
+  let currentCtm = [1, 0, 0, 1, 0, 0];
+  const circles: RawVectorCircle[] = [];
+
+  for (let i = 0; i < ops.fnArray.length; i++) {
+    const fn = ops.fnArray[i];
+    const args = ops.argsArray[i];
+
+    if (fn === saveOp) {
+      ctmStack.push([...currentCtm]);
+    } else if (fn === restoreOp) {
+      if (ctmStack.length > 0) currentCtm = ctmStack.pop()!;
+    } else if (fn === transformOp && Array.isArray(args)) {
+      currentCtm = multiplyMatrix(currentCtm, args);
+    } else if (fn === constructPathOp && Array.isArray(args) && args.length >= 2) {
+      const opList = args[0];
+      const dataList = args[1];
+
+      // Op 15 is bezierCurveTo in pdfjs
+      if (Array.isArray(opList) && opList.some((o: number) => o === 15) && opList.length >= 4 && opList.length <= 16) {
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+
+        for (let k = 0; k < dataList.length; k += 2) {
+          const pt = applyTransform(currentCtm, dataList[k], dataList[k + 1]);
+          const vpPt = viewport.convertToViewportPoint(pt[0], pt[1]);
+          minX = Math.min(minX, vpPt[0]);
+          maxX = Math.max(maxX, vpPt[0]);
+          minY = Math.min(minY, vpPt[1]);
+          maxY = Math.max(maxY, vpPt[1]);
+        }
+
+        const w = maxX - minX;
+        const h = maxY - minY;
+        const radius = (w + h) / 4;
+        if (w >= 8 && h >= 8 && Math.abs(w - h) <= Math.max(12, (w + h) * 0.2)) {
+          circles.push({
+            cx: (minX + maxX) / 2,
+            cy: (minY + maxY) / 2,
+            radius,
+            box: { minX, maxX, minY, maxY },
+          });
+        }
+      }
+    }
+  }
+
+  return circles;
+}
+
 export async function loadPdfPage(
   file: File,
   pageNumber = 1,
@@ -248,11 +329,21 @@ export async function loadPdfPage(
     ? extractLinesFromImageData(ctx, offscreen.width, offscreen.height)
     : [];
 
+  // Extract Vector Circles (for grid bubbles on perimeter)
+  let vectorCircles: RawVectorCircle[] = [];
+  try {
+    const ops = await page.getOperatorList();
+    vectorCircles = extractCirclesFromOperatorList(ops, viewport, pdfjsLib.OPS);
+  } catch (err) {
+    console.warn('Could not extract vector circles from PDF operator list:', err);
+  }
+
   return {
     imageDataUrl: offscreen.toDataURL('image/png'),
     width: offscreen.width,
     height: offscreen.height,
     vectorLines,
+    vectorCircles,
     texts,
   };
 }
@@ -260,3 +351,4 @@ export async function loadPdfPage(
 export async function loadPdfFirstPage(file: File): Promise<LoadedPdfPlan> {
   return loadPdfPage(file, 1, 3.0);
 }
+

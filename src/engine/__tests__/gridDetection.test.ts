@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'fs';
+import path from 'path';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import {
   extractGridAxes,
   extractGridIntersections,
@@ -7,7 +10,8 @@ import {
   ClassifiedLine,
   GridAxis,
 } from '../beamDetector';
-import { RawTextItem, RawVectorLine } from '../scaleCalibrator';
+import { RawTextItem, RawVectorLine, RawVectorCircle } from '../scaleCalibrator';
+import { extractCirclesFromOperatorList } from '../../utils/pdfLoader';
 
 describe('Grid-First Detection and Grid Intersections', () => {
   it('correctly extracts grid axes and labels from grid lines and bubble texts', () => {
@@ -144,5 +148,92 @@ describe('Grid-First Detection and Grid Intersections', () => {
     expect(diag.counts.gridIntersections).toBe(4);
     expect(diag.gridIntersections.length).toBe(4);
     expect(diag.counts.gridGuidedBeams).toBeGreaterThanOrEqual(1);
+  });
+
+  it('strictly extracts grid axes from circular bubbles around the perimeter (Top: 1-6, Right: A-D) and excludes interior detail circles', () => {
+    // 6 Vertical grid bubbles on top perimeter (cy = 80)
+    const circles: RawVectorCircle[] = [
+      { cx: 100, cy: 80, radius: 15 },
+      { cx: 250, cy: 80, radius: 15 },
+      { cx: 400, cy: 80, radius: 15 },
+      { cx: 530, cy: 80, radius: 15 },
+      { cx: 600, cy: 80, radius: 15 },
+      { cx: 800, cy: 80, radius: 15 },
+      // 4 Horizontal grid bubbles on right perimeter (cx = 1000)
+      { cx: 1000, cy: 300, radius: 15 },
+      { cx: 1000, cy: 400, radius: 15 },
+      { cx: 1000, cy: 550, radius: 15 },
+      { cx: 1000, cy: 620, radius: 15 },
+      // Interior detail circle (should be EXCLUDED)
+      { cx: 650, cy: 200, radius: 15 },
+      // Tiny rebar dot (should be EXCLUDED)
+      { cx: 700, cy: 450, radius: 5 },
+    ];
+
+    const texts: RawTextItem[] = [
+      { text: '1', x: 100, y: 80 },
+      { text: '2', x: 250, y: 80 },
+      { text: '3', x: 400, y: 80 },
+      { text: '4', x: 530, y: 80 },
+      { text: '5', x: 600, y: 80 },
+      { text: '6', x: 800, y: 80 },
+      { text: 'A', x: 1000, y: 300 },
+      { text: 'B', x: 1000, y: 400 },
+      { text: 'C', x: 1000, y: 550 },
+      { text: 'D', x: 1000, y: 620 },
+      { text: 'J', x: 650, y: 200 },
+      { text: 'GS', x: 700, y: 450 },
+    ];
+
+    const pageDims = { width: 1200, height: 800 };
+    const axes = extractGridAxes([], texts, circles, pageDims);
+
+    expect(axes.vertical.length).toBe(6);
+    expect(axes.vertical.map((v) => v.label)).toEqual(['1', '2', '3', '4', '5', '6']);
+
+    expect(axes.horizontal.length).toBe(4);
+    expect(axes.horizontal.map((h) => h.label)).toEqual(['A', 'B', 'C', 'D']);
+
+    // Check intersections
+    const intersections = extractGridIntersections(axes);
+    expect(intersections.length).toBe(24);
+  });
+
+  it('verifies SPW-FORCON-ST-261022-01.pdf has vertical grids 1-6 and horizontal grids A-D', async () => {
+    const pdfPath = path.resolve(process.cwd(), 'SPW-FORCON-ST-261022-01.pdf');
+    expect(fs.existsSync(pdfPath)).toBe(true);
+
+    const buf = fs.readFileSync(pdfPath);
+    const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
+    const page = await doc.getPage(1);
+    const viewport = page.getViewport({ scale: 1.0 });
+
+    const ops = await page.getOperatorList();
+    const circles = extractCirclesFromOperatorList(ops, viewport, pdfjsLib.OPS);
+    expect(circles.length).toBeGreaterThan(0);
+
+    const textContent = await page.getTextContent();
+    const texts: RawTextItem[] = [];
+    for (const item of textContent.items) {
+      if ('str' in item && item.str.trim()) {
+        const pt = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+        texts.push({ text: item.str.trim(), x: pt[0], y: pt[1] });
+      }
+    }
+
+    const pageDims = { width: viewport.width, height: viewport.height };
+    const axes = extractGridAxes([], texts, circles, pageDims);
+
+    // Exact answer requested by user:
+    // Vertical grids: 1, 2, 3, 4, 5, 6
+    // Horizontal grids: A, B, C, D
+    expect(axes.vertical.length).toBe(6);
+    expect(axes.vertical.map((v) => v.label)).toEqual(['1', '2', '3', '4', '5', '6']);
+
+    expect(axes.horizontal.length).toBe(4);
+    expect(axes.horizontal.map((h) => h.label)).toEqual(['A', 'B', 'C', 'D']);
+
+    const intersections = extractGridIntersections(axes);
+    expect(intersections.length).toBe(24);
   });
 });

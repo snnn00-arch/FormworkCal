@@ -13,6 +13,13 @@ export interface RawTextItem {
   y: number;
 }
 
+export interface RawVectorCircle {
+  cx: number;
+  cy: number;
+  radius: number;
+  box?: { minX: number; maxX: number; minY: number; maxY: number };
+}
+
 export function calculateScaleFromTwoPoints(
   p1: Point,
   p2: Point,

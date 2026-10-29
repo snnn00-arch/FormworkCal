@@ -17,6 +17,7 @@ import {
   autoDetectScaleFromPlanData,
   RawTextItem,
   RawVectorLine,
+  RawVectorCircle,
 } from './engine/scaleCalibrator';
 import {
   autoDetectBeamsWithDiagnostics,
@@ -51,6 +52,7 @@ export const App: React.FC = () => {
     undefined
   );
   const [vectorLines, setVectorLines] = useState<RawVectorLine[]>([]);
+  const [vectorCircles, setVectorCircles] = useState<RawVectorCircle[]>([]);
   const [planTexts, setPlanTexts] = useState<RawTextItem[]>([]);
 
   // Multi-page PDF Selection State
@@ -134,9 +136,10 @@ export const App: React.FC = () => {
       beams,
       pixelsPerCm,
       defaultBeamWidthCm,
-      pdfDimensions
+      pdfDimensions,
+      vectorCircles
     );
-  }, [vectorLines, planTexts, beams, pixelsPerCm, defaultBeamWidthCm, pdfDimensions]);
+  }, [vectorLines, planTexts, beams, pixelsPerCm, defaultBeamWidthCm, pdfDimensions, vectorCircles]);
 
   // Selection Handler (with Shift-click toggle)
   const handleSelectBeam = (id: string | null, isShift = false) => {
@@ -166,6 +169,7 @@ export const App: React.FC = () => {
       setPdfImageUrl(loaded.imageDataUrl);
       setPdfDimensions(dims);
       setVectorLines(loaded.vectorLines);
+      setVectorCircles(loaded.vectorCircles || []);
       setPlanTexts(loaded.texts);
 
       // 1. Auto scale detection
@@ -174,13 +178,14 @@ export const App: React.FC = () => {
       setScaleNote(scaleResult.confidence);
 
       // 2. Auto line classification + Grid-First Detection (default height = 50 cm)
-      if (loaded.vectorLines.length > 0) {
+      if (loaded.vectorLines.length > 0 || (loaded.vectorCircles && loaded.vectorCircles.length > 0)) {
         const diag = autoDetectBeamsWithDiagnostics(
           loaded.vectorLines,
           scaleResult.pixelsPerCm,
           50,
           loaded.texts,
-          dims
+          dims,
+          loaded.vectorCircles || []
         );
         setGridAxes(diag.gridAxes);
         setGridIntersections(diag.gridIntersections);
@@ -236,7 +241,8 @@ export const App: React.FC = () => {
       pixelsPerCm,
       50,
       planTexts,
-      pdfDimensions
+      pdfDimensions,
+      vectorCircles
     );
     setGridAxes(diag.gridAxes);
     setGridIntersections(diag.gridIntersections);
@@ -585,6 +591,7 @@ export const App: React.FC = () => {
       beams,
       pdfDimensions,
       pdfImageUrl,
+      vectorCircles,
     };
     saveProjectFile(projectData);
   };
@@ -600,6 +607,9 @@ export const App: React.FC = () => {
       setAutoParallelPair(loaded.autoParallelPair);
       setPdfDimensions(loaded.pdfDimensions);
       setPdfImageUrl(loaded.pdfImageUrl || null);
+      if (loaded.vectorCircles) {
+        setVectorCircles(loaded.vectorCircles);
+      }
       setSelectedBeamIds(loaded.beams[0] ? [loaded.beams[0].id] : []);
       setPast([]);
       setFuture([]);
