@@ -5,7 +5,7 @@ import {
   PlacedPanel,
   Point,
 } from '../types/formwork';
-import { SnapPoint } from '../engine/beamDetector';
+import { SnapPoint, GridAxis, GridIntersection } from '../engine/beamDetector';
 import { RawVectorLine } from '../engine/scaleCalibrator';
 import { getBeamLengthCm, getPlacedPanelPolygon } from '../engine/formworkOptimizer';
 import { ZoomIn, ZoomOut, RotateCcw, Upload, Trash2, Move, Scissors } from 'lucide-react';
@@ -14,6 +14,8 @@ interface PlanCanvasProps {
   canvasRef: React.RefObject<HTMLCanvasElement>;
   pdfImageUrl: string | null;
   vectorLines?: RawVectorLine[];
+  gridAxes?: { horizontal: GridAxis[]; vertical: GridAxis[] };
+  gridIntersections?: GridIntersection[];
   beams: BeamElement[];
   panels: PlacedPanel[];
   snapPoints?: SnapPoint[];
@@ -106,6 +108,8 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   canvasRef,
   pdfImageUrl,
   vectorLines = [],
+  gridAxes,
+  gridIntersections = [],
   beams,
   panels,
   snapPoints = [],
@@ -240,6 +244,58 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         ctx.lineTo(line.x2, line.y2);
       }
       ctx.stroke();
+      ctx.restore();
+    }
+
+    // 2c. Draw Structural Grid Lines & Grid Intersections (⊕ A-1, B-2)
+    if (gridAxes) {
+      ctx.save();
+      ctx.strokeStyle = '#94A3B8';
+      ctx.lineWidth = 1.0 / zoom;
+      ctx.setLineDash([6 / zoom, 6 / zoom]);
+
+      for (const hg of gridAxes.horizontal) {
+        ctx.beginPath();
+        ctx.moveTo(hg.start, hg.coord);
+        ctx.lineTo(hg.end, hg.coord);
+        ctx.stroke();
+      }
+      for (const vg of gridAxes.vertical) {
+        ctx.beginPath();
+        ctx.moveTo(vg.coord, vg.start);
+        ctx.lineTo(vg.coord, vg.end);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
+    if (gridIntersections && gridIntersections.length > 0) {
+      ctx.save();
+      for (const gi of gridIntersections) {
+        const r = Math.max(5, 6.5 / zoom);
+        // Draw crosshair circle ⊕
+        ctx.strokeStyle = '#2563EB';
+        ctx.lineWidth = Math.max(1.0, 1.4 / zoom);
+        ctx.beginPath();
+        ctx.arc(gi.x, gi.y, r, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(gi.x - r - 2.5 / zoom, gi.y);
+        ctx.lineTo(gi.x + r + 2.5 / zoom, gi.y);
+        ctx.moveTo(gi.x, gi.y - r - 2.5 / zoom);
+        ctx.lineTo(gi.x, gi.y + r + 2.5 / zoom);
+        ctx.stroke();
+
+        // Node Label (e.g. "A-1", "B-2")
+        const fontSize = Math.max(9, 11 / zoom);
+        ctx.font = `bold ${fontSize}px sans-serif`;
+        ctx.fillStyle = '#1E3A8A';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(gi.label, gi.x + r + 3 / zoom, gi.y - 2 / zoom);
+      }
       ctx.restore();
     }
 
@@ -466,8 +522,9 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         dragState?.mode === 'move_end')
     ) {
       const boxHalf = 6.5 / zoom;
-      ctx.strokeStyle = '#10B981';
-      ctx.fillStyle = 'rgba(16, 185, 129, 0.18)';
+      const isGridSnap = activeSnap.kind === 'grid_intersection';
+      ctx.strokeStyle = isGridSnap ? '#2563EB' : '#10B981';
+      ctx.fillStyle = isGridSnap ? 'rgba(37, 99, 235, 0.22)' : 'rgba(16, 185, 129, 0.18)';
       ctx.lineWidth = 2.2 / zoom;
       ctx.fillRect(
         activeSnap.x - boxHalf,
@@ -483,7 +540,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       );
 
       // Snap label badge
-      ctx.fillStyle = '#047857';
+      ctx.fillStyle = isGridSnap ? '#1D4ED8' : '#047857';
       ctx.font = `700 ${Math.max(9, 10 / zoom)}px "Plus Jakarta Sans", sans-serif`;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'bottom';
@@ -525,6 +582,8 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     dragState,
     pdfImage,
     vectorLines,
+    gridAxes,
+    gridIntersections,
     pan,
     zoom,
     selectedBeamId,
@@ -539,6 +598,13 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
 
   // Mouse Handlers for Pan, Draw, Select, Drag-Move, and Scale Calibration
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    // Specifically cancels/disables drag, draw, or pan from pressing the mouse roller / middle button (e.button === 1) or right click
+    // Only allows left click (e.button === 0) for drawing, selecting, and dragging
+    if (e.button !== 0) {
+      e.preventDefault();
+      return;
+    }
+
     const rawWorld = screenToWorld(e.clientX, e.clientY);
     const snapTolPx = 16 / zoom;
     const snapped =
@@ -941,6 +1007,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onWheel={handleWheel}
+        onAuxClick={(e) => e.preventDefault()}
         className={`w-full h-full block ${
           dragState
             ? 'cursor-grabbing'

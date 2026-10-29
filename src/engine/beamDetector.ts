@@ -35,6 +35,17 @@ export interface GridAxis {
   label?: string;
 }
 
+export interface GridIntersection {
+  id: string;
+  x: number;
+  y: number;
+  hCoord: number;
+  vCoord: number;
+  label: string; // e.g. "A-1", "B-2", "C-3"
+  hLabel?: string;
+  vLabel?: string;
+}
+
 export interface BeamDetectionDiagnostics {
   beams: BeamElement[];
   classifiedLines: ClassifiedLine[];
@@ -42,12 +53,14 @@ export interface BeamDetectionDiagnostics {
     horizontal: GridAxis[];
     vertical: GridAxis[];
   };
+  gridIntersections: GridIntersection[];
   counts: {
     borderOrTitleBlock: number;
     gridOrDimension: number;
     beamCandidates: number;
     horizontalGrids: number;
     verticalGrids: number;
+    gridIntersections: number;
     gridGuidedBeams: number;
     detectedBeams: number;
   };
@@ -838,6 +851,48 @@ export function extractGridAxes(
 }
 
 /**
+ * Calculates all Grid Intersections (จุดตัดกริด) from horizontal and vertical grid axes.
+ * Labels each intersection node intuitively (e.g. A-1, A-2, B-1, B-2) to establish the
+ * primary structural coordinate reference for columns, beams, and formwork snapping.
+ */
+export function extractGridIntersections(
+  gridAxes: { horizontal: GridAxis[]; vertical: GridAxis[] }
+): GridIntersection[] {
+  const intersections: GridIntersection[] = [];
+  let idCounter = 1;
+
+  for (let hIdx = 0; hIdx < gridAxes.horizontal.length; hIdx++) {
+    const hg = gridAxes.horizontal[hIdx];
+    const fallbackH = String.fromCharCode(65 + (hIdx % 26));
+    const hLabel = hg.label || fallbackH;
+
+    for (let vIdx = 0; vIdx < gridAxes.vertical.length; vIdx++) {
+      const vg = gridAxes.vertical[vIdx];
+      const fallbackV = String(vIdx + 1);
+      const vLabel = vg.label || fallbackV;
+
+      let label = `${hLabel}-${vLabel}`;
+      if (/^\d+$/.test(hLabel) && /^[A-Z]$/i.test(vLabel)) {
+        label = `${vLabel}-${hLabel}`;
+      }
+
+      intersections.push({
+        id: `grid-node-${idCounter++}`,
+        x: vg.coord,
+        y: hg.coord,
+        hCoord: hg.coord,
+        vCoord: vg.coord,
+        label,
+        hLabel: hg.label,
+        vLabel: vg.label,
+      });
+    }
+  }
+
+  return intersections;
+}
+
+/**
  * Stage 1: Classifies raw lines into:
  * - 'border_or_titleblock' (กรอบกระดาษ / ตารางรายการประกอบแบบ)
  * - 'grid_or_dimension' (เส้นกริดเสา / เส้นบอกระยะ)
@@ -1163,12 +1218,15 @@ export function autoDetectBeamsWithDiagnostics(
   const rawCandidates = classifiedLines.filter((l) => l.category === 'beam_candidate');
   const candidates = mergeCollinearCandidateSegments(rawCandidates, 3.0, Math.max(35, 35 * safeScale));
 
+  const gridIntersections = extractGridIntersections(gridAxes);
+
   const counts = {
     borderOrTitleBlock: classifiedLines.filter((l) => l.category === 'border_or_titleblock').length,
     gridOrDimension: classifiedLines.filter((l) => l.category === 'grid_or_dimension').length,
     beamCandidates: candidates.length,
     horizontalGrids: gridAxes.horizontal.length,
     verticalGrids: gridAxes.vertical.length,
+    gridIntersections: gridIntersections.length,
     gridGuidedBeams: 0,
     detectedBeams: 0,
   };
@@ -1238,6 +1296,115 @@ export function autoDetectBeamsWithDiagnostics(
       crossesGridCount,
     };
   };
+
+  // =========================================================================
+  // PASS 0: Grid-First Foundation (ค้นหากริดและจุดตัดเป็นอันดับแรก แล้วสร้างคานหลักระหว่างคู่จุดตัดกริด)
+  // Reconstruct main structural beams anchored directly between consecutive Grid Intersections!
+  // =========================================================================
+  if (gridAxes.horizontal.length >= 1 && gridAxes.vertical.length >= 2) {
+    // 0A. Horizontal Grid Bays
+    for (const hg of gridAxes.horizontal) {
+      for (let vIdx = 0; vIdx < gridAxes.vertical.length - 1; vIdx++) {
+        const v1 = gridAxes.vertical[vIdx];
+        const v2 = gridAxes.vertical[vIdx + 1];
+        const bayStart = Math.min(v1.coord, v2.coord);
+        const bayEnd = Math.max(v1.coord, v2.coord);
+        const bayLen = bayEnd - bayStart;
+        if (bayLen < minLengthPx) continue;
+
+        // Check if there are candidate lines or beam tags along this bay
+        const matchingCandidates = candidates.filter((c, idx) => {
+          if (usedIndices.has(idx)) return false;
+          if (c.orientation !== 'horizontal') return false;
+          if (Math.abs(c.coord - hg.coord) > maxWidthPx * 0.75) return false;
+          const ovStart = Math.max(c.start, bayStart);
+          const ovEnd = Math.min(c.end, bayEnd);
+          return ovEnd - ovStart >= bayLen * 0.35;
+        });
+
+        const hasNearbyTag = texts.some(
+          (txt, tIdx) =>
+            !usedLabelIndices.has(tIdx) &&
+            isBeamTagText(txt.text) &&
+            Math.abs(txt.y - hg.coord) <= Math.max(35, 38 * safeScale) &&
+            txt.x >= bayStart - 15 &&
+            txt.x <= bayEnd + 15
+        );
+
+        if (matchingCandidates.length >= 1 || hasNearbyTag) {
+          matchingCandidates.forEach((c) => {
+            const idx = candidates.indexOf(c);
+            if (idx !== -1) usedIndices.add(idx);
+          });
+
+          const startPt: Point = { x: bayStart, y: hg.coord };
+          const endPt: Point = { x: bayEnd, y: hg.coord };
+          if (!isDuplicateBeam(startPt, endPt, 'horizontal')) {
+            const detectedLabel = findNearestBeamLabel(startPt, endPt, 'horizontal', texts, usedLabelIndices);
+            const beamName = detectedLabel || `B${indexCounter++}`;
+            const midX = (bayStart + bayEnd) / 2;
+            const inferredHeight = inferBeamHeightFromNearbyTexts(midX, hg.coord, texts, defaultHeightCm);
+            counts.gridGuidedBeams++;
+            beams.push(
+              createBeamElement(beamName, startPt, endPt, inferredHeight, DEFAULT_BEAM_WIDTH_CM)
+            );
+          }
+        }
+      }
+    }
+  }
+
+  if (gridAxes.vertical.length >= 1 && gridAxes.horizontal.length >= 2) {
+    // 0B. Vertical Grid Bays
+    for (const vg of gridAxes.vertical) {
+      for (let hIdx = 0; hIdx < gridAxes.horizontal.length - 1; hIdx++) {
+        const h1 = gridAxes.horizontal[hIdx];
+        const h2 = gridAxes.horizontal[hIdx + 1];
+        const bayStart = Math.min(h1.coord, h2.coord);
+        const bayEnd = Math.max(h1.coord, h2.coord);
+        const bayLen = bayEnd - bayStart;
+        if (bayLen < minLengthPx) continue;
+
+        const matchingCandidates = candidates.filter((c, idx) => {
+          if (usedIndices.has(idx)) return false;
+          if (c.orientation !== 'vertical') return false;
+          if (Math.abs(c.coord - vg.coord) > maxWidthPx * 0.75) return false;
+          const ovStart = Math.max(c.start, bayStart);
+          const ovEnd = Math.min(c.end, bayEnd);
+          return ovEnd - ovStart >= bayLen * 0.35;
+        });
+
+        const hasNearbyTag = texts.some(
+          (txt, tIdx) =>
+            !usedLabelIndices.has(tIdx) &&
+            isBeamTagText(txt.text) &&
+            Math.abs(txt.x - vg.coord) <= Math.max(35, 38 * safeScale) &&
+            txt.y >= bayStart - 15 &&
+            txt.y <= bayEnd + 15
+        );
+
+        if (matchingCandidates.length >= 1 || hasNearbyTag) {
+          matchingCandidates.forEach((c) => {
+            const idx = candidates.indexOf(c);
+            if (idx !== -1) usedIndices.add(idx);
+          });
+
+          const startPt: Point = { x: vg.coord, y: bayStart };
+          const endPt: Point = { x: vg.coord, y: bayEnd };
+          if (!isDuplicateBeam(startPt, endPt, 'vertical')) {
+            const detectedLabel = findNearestBeamLabel(startPt, endPt, 'vertical', texts, usedLabelIndices);
+            const beamName = detectedLabel || `B${indexCounter++}`;
+            const midY = (bayStart + bayEnd) / 2;
+            const inferredHeight = inferBeamHeightFromNearbyTexts(vg.coord, midY, texts, defaultHeightCm);
+            counts.gridGuidedBeams++;
+            beams.push(
+              createBeamElement(beamName, startPt, endPt, inferredHeight, DEFAULT_BEAM_WIDTH_CM)
+            );
+          }
+        }
+      }
+    }
+  }
 
   // =========================================================================
   // PASS 1: Detect Parallel Beam Candidate Pairs (prioritizing beams ON or CROSSING Grid Lines!)
@@ -1576,6 +1743,7 @@ export function autoDetectBeamsWithDiagnostics(
     beams: cleanSides,
     classifiedLines,
     gridAxes,
+    gridIntersections,
     counts,
   };
 }
@@ -1956,7 +2124,7 @@ function groupClosedInnerBayLoops(
 export interface SnapPoint {
   x: number;
   y: number;
-  kind: 'column_corner' | 'line_corner' | 'beam_endpoint';
+  kind: 'column_corner' | 'line_corner' | 'beam_endpoint' | 'grid_intersection';
   label: string;
 }
 
@@ -1979,6 +2147,17 @@ export function extractColumnSnapPoints(
   if (lines.length > 0) {
     const classified = classifyPlanLines(lines, texts, pageDimensions);
     const grids = extractGridAxes(classified, texts);
+    const gridIntersections = extractGridIntersections(grids);
+
+    // 0. High-Priority Grid Intersections (จุดตัดแกนกริดหลัก เช่น A-1, B-2)
+    for (const gi of gridIntersections) {
+      rawPoints.push({
+        x: gi.x,
+        y: gi.y,
+        kind: 'grid_intersection',
+        label: `จุดตัดกริด ${gi.label}`,
+      });
+    }
 
     // 1. 4 Column Corners around every Grid Intersection (มุมเสารอบจุดตัดกริด)
     for (const vg of grids.vertical) {

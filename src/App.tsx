@@ -25,6 +25,8 @@ import {
   extractColumnSnapPoints,
   updateBoxGroupRectangle,
   ungroupBoxEdges,
+  GridAxis,
+  GridIntersection,
 } from './engine/beamDetector';
 import {
   downloadCsvFile,
@@ -59,6 +61,13 @@ export const App: React.FC = () => {
     file: File;
   } | null>(null);
   const [isLoadingPdfPage, setIsLoadingPdfPage] = useState(false);
+
+  // Structural Grid System State
+  const [gridAxes, setGridAxes] = useState<{
+    horizontal: GridAxis[];
+    vertical: GridAxis[];
+  } | undefined>(undefined);
+  const [gridIntersections, setGridIntersections] = useState<GridIntersection[]>([]);
 
   const [beams, setBeams] = useState<BeamElement[]>([]);
   const [pixelsPerCm, setPixelsPerCm] = useState<number>(1.2);
@@ -164,7 +173,7 @@ export const App: React.FC = () => {
       setPixelsPerCm(scaleResult.pixelsPerCm);
       setScaleNote(scaleResult.confidence);
 
-      // 2. Auto line classification + Grid-Referenced Beam Line Detection (default height = 50 cm)
+      // 2. Auto line classification + Grid-First Detection (default height = 50 cm)
       if (loaded.vectorLines.length > 0) {
         const diag = autoDetectBeamsWithDiagnostics(
           loaded.vectorLines,
@@ -173,6 +182,9 @@ export const App: React.FC = () => {
           loaded.texts,
           dims
         );
+        setGridAxes(diag.gridAxes);
+        setGridIntersections(diag.gridIntersections);
+
         if (diag.beams.length > 0) {
           const withCorners = applyAutoCornerExtensions(diag.beams, scaleResult.pixelsPerCm);
           updateBeamsWithHistory(withCorners);
@@ -180,7 +192,7 @@ export const App: React.FC = () => {
           setIsPdfModalOpen(false);
           setPdfInspection(null);
           alert(
-            `นำเข้า PDF หน้า ${pageNumber} สำเร็จ (ความคมชัดระดับ Ultra-HD Vector)!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- ตัดเส้นกรอบกระดาษ/ตาราง: ${diag.counts.borderOrTitleBlock} เส้น\n- ตรวจพบแกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- เกาะไม้แบบตามเส้นคานจริง: ${diag.beams.length} ช่วง (ความสูงเริ่มต้น 50 ซม.)`
+            `นำเข้า PDF หน้า ${pageNumber} สำเร็จ (ความคมชัดระดับ Ultra-HD Vector)!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- ค้นพบแกนกริดหลัก: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- กำหนดจุดตัดกริด (Grid Intersections): ${diag.counts.gridIntersections} จุดตัด (A-1, B-2...)\n- วางคานหลักตามแนวกริดและตัดคานซอย: ${diag.beams.length} ช่วง (ความสูงเริ่มต้น 50 ซม.)`
           );
           return;
         }
@@ -226,9 +238,12 @@ export const App: React.FC = () => {
       planTexts,
       pdfDimensions
     );
+    setGridAxes(diag.gridAxes);
+    setGridIntersections(diag.gridIntersections);
+
     if (diag.beams.length === 0) {
       alert(
-        `สแกนจำแนกเส้นเสร็จสิ้น:\n- ตัดกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- พบแกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- ไม่พบคู่เส้นขนานของคานที่ชัดเจน คุณสามารถใช้ปุ่ม "ตีกรอบวงใน" หรือ "วาดคาน (วงใน)" คลิกเกาะไม้แบบตามเส้นบนแปลนได้ทันทีครับ`
+        `สแกนจำแนกเส้นเสร็จสิ้น:\n- ตัดกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- พบแกนเส้นกริด: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน (${diag.counts.gridIntersections} จุดตัด)\n- ไม่พบคู่เส้นขนานของคานที่ชัดเจน คุณสามารถใช้ปุ่ม "ตีกรอบวงใน" หรือ "วาดคาน (วงใน)" คลิกเกาะไม้แบบตามเส้นบนแปลนได้ทันทีครับ`
       );
       return;
     }
@@ -236,7 +251,7 @@ export const App: React.FC = () => {
     updateBeamsWithHistory(withCorners);
     setSelectedBeamIds(withCorners[0] ? [withCorners[0].id] : []);
     alert(
-      `สแกนรับรู้เส้นและเกาะไม้แบบสำเร็จ!\n- ตัดเส้นกรอบกระดาษ/ตารางออก: ${diag.counts.borderOrTitleBlock} เส้น\n- ใช้แกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- เกาะไม้แบบตามเส้นคาน: ${diag.beams.length} ช่วง (ความสูง 50 ซม. ทั้งหมด, ไม้แบบหนา 5 ซม.)`
+      `สแกนรับรู้โครงข่ายกริดและเกาะไม้แบบสำเร็จ!\n- ค้นพบแกนกริดหลัก: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- กำหนดจุดตัดกริด (Grid Intersections): ${diag.counts.gridIntersections} จุดตัด (A-1, B-2...)\n- วางคานหลักตามแนวกริดและตัดคานซอย: ${diag.beams.length} ช่วง (ความสูง 50 ซม. ทั้งหมด, ไม้แบบหนา 5 ซม.)`
     );
   };
 
@@ -654,6 +669,8 @@ export const App: React.FC = () => {
           canvasRef={canvasRef}
           pdfImageUrl={pdfImageUrl}
           vectorLines={vectorLines}
+          gridAxes={gridAxes}
+          gridIntersections={gridIntersections}
           beams={beams}
           panels={panels}
           snapPoints={snapPoints}
