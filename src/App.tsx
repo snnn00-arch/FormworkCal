@@ -34,10 +34,11 @@ import {
   loadProjectFile,
   saveProjectFile,
 } from './engine/exportEngine';
-import { loadPdfFirstPage } from './utils/pdfLoader';
+import { inspectPdfPages, loadPdfPage, PdfPageSummary } from './utils/pdfLoader';
 import { TopToolbar } from './components/TopToolbar';
 import { PlanCanvas } from './components/PlanCanvas';
 import { RightSidebar } from './components/RightSidebar';
+import { PdfPageSelectorModal } from './components/PdfPageSelectorModal';
 
 export const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -49,6 +50,15 @@ export const App: React.FC = () => {
   );
   const [vectorLines, setVectorLines] = useState<RawVectorLine[]>([]);
   const [planTexts, setPlanTexts] = useState<RawTextItem[]>([]);
+
+  // Multi-page PDF Selection State
+  const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
+  const [pdfInspection, setPdfInspection] = useState<{
+    totalPages: number;
+    pages: PdfPageSummary[];
+    file: File;
+  } | null>(null);
+  const [isLoadingPdfPage, setIsLoadingPdfPage] = useState(false);
 
   const [beams, setBeams] = useState<BeamElement[]>([]);
   const [pixelsPerCm, setPixelsPerCm] = useState<number>(1.2);
@@ -139,9 +149,10 @@ export const App: React.FC = () => {
   };
 
   // Action Handlers
-  const handleUploadPdf = async (file: File) => {
+  const loadSpecificPdfPage = async (file: File, pageNumber: number) => {
     try {
-      const loaded = await loadPdfFirstPage(file);
+      setIsLoadingPdfPage(true);
+      const loaded = await loadPdfPage(file, pageNumber, 3.0);
       const dims = { width: loaded.width, height: loaded.height };
       setPdfImageUrl(loaded.imageDataUrl);
       setPdfDimensions(dims);
@@ -166,16 +177,37 @@ export const App: React.FC = () => {
           const withCorners = applyAutoCornerExtensions(diag.beams, scaleResult.pixelsPerCm);
           updateBeamsWithHistory(withCorners);
           setSelectedBeamIds(withCorners[0] ? [withCorners[0].id] : []);
+          setIsPdfModalOpen(false);
+          setPdfInspection(null);
           alert(
-            `นำเข้า PDF สำเร็จ!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- ตัดเส้นกรอบกระดาษ/ตาราง: ${diag.counts.borderOrTitleBlock} เส้น\n- ตรวจพบแกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- เกาะไม้แบบตามเส้นคานจริง: ${diag.beams.length} ช่วง (ความสูงเริ่มต้น 50 ซม.)`
+            `นำเข้า PDF หน้า ${pageNumber} สำเร็จ (ความคมชัดระดับ Ultra-HD Vector)!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- ตัดเส้นกรอบกระดาษ/ตาราง: ${diag.counts.borderOrTitleBlock} เส้น\n- ตรวจพบแกนเส้นกริดอ้างอิง: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- เกาะไม้แบบตามเส้นคานจริง: ${diag.beams.length} ช่วง (ความสูงเริ่มต้น 50 ซม.)`
           );
           return;
         }
       }
 
+      setIsPdfModalOpen(false);
+      setPdfInspection(null);
       alert(
-        `นำเข้า PDF สำเร็จ!\n- ตั้งสเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม.\n- คุณสามารถกดปุ่ม "สแกนคาน (Auto 50 ซม.)" หรือเลือกเครื่องมือวาดคานวงใน / วงนอก ได้ทันทีครับ`
+        `นำเข้า PDF หน้า ${pageNumber} สำเร็จ (ความคมชัดระดับ Ultra-HD Vector)!\n- ตั้งสเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม.\n- คุณสามารถกดปุ่ม "สแกนคาน (Auto 50 ซม.)" หรือเลือกเครื่องมือวาดคานวงใน / วงนอก ได้ทันทีครับ`
       );
+    } catch (err) {
+      console.error('Failed to load PDF page:', err);
+      alert('ไม่สามารถโหลดหน้านี้ได้ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setIsLoadingPdfPage(false);
+    }
+  };
+
+  const handleUploadPdf = async (file: File) => {
+    try {
+      const inspection = await inspectPdfPages(file);
+      if (inspection.totalPages > 1) {
+        setPdfInspection({ ...inspection, file });
+        setIsPdfModalOpen(true);
+        return;
+      }
+      await loadSpecificPdfPage(file, 1);
     } catch (err) {
       console.error('Failed to load PDF:', err);
       alert('ไม่สามารถเปิดไฟล์ PDF นี้ได้ กรุณาลองใช้ไฟล์ PDF แปลนอื่น');
@@ -337,20 +369,22 @@ export const App: React.FC = () => {
   };
 
   const handleBatchMoveBeams = (
-    ids: string[],
+    origEdges: Array<{ id: string; start: Point; end: Point }>,
     dx: number,
     dy: number,
     finalize = false
   ) => {
+    const origMap = new Map(origEdges.map((e) => [e.id, e]));
     if (finalize) {
       updateBeamsWithHistory((prev) =>
         applyAutoCornerExtensions(
           prev.map((b) => {
-            if (!ids.includes(b.id)) return b;
+            const orig = origMap.get(b.id);
+            if (!orig) return b;
             return {
               ...b,
-              start: { x: b.start.x + dx, y: b.start.y + dy },
-              end: { x: b.end.x + dx, y: b.end.y + dy },
+              start: { x: orig.start.x + dx, y: orig.start.y + dy },
+              end: { x: orig.end.x + dx, y: orig.end.y + dy },
               leftSide: { ...b.leftSide, customPanels: undefined },
               rightSide: { ...b.rightSide, customPanels: undefined },
             };
@@ -361,11 +395,12 @@ export const App: React.FC = () => {
     } else {
       setBeams((prev) =>
         prev.map((b) => {
-          if (!ids.includes(b.id)) return b;
+          const orig = origMap.get(b.id);
+          if (!orig) return b;
           return {
             ...b,
-            start: { x: b.start.x + dx, y: b.start.y + dy },
-            end: { x: b.end.x + dx, y: b.end.y + dy },
+            start: { x: orig.start.x + dx, y: orig.start.y + dy },
+            end: { x: orig.end.x + dx, y: orig.end.y + dy },
           };
         })
       );
@@ -427,39 +462,6 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleMoveBoxGroup = (
-    boxGroupId: string,
-    dx: number,
-    dy: number,
-    finalize = false
-  ) => {
-    if (finalize) {
-      updateBeamsWithHistory((prev) => {
-        const moved = prev.map((b) => {
-          if (b.boxGroupId !== boxGroupId) return b;
-          return {
-            ...b,
-            start: { x: b.start.x + dx, y: b.start.y + dy },
-            end: { x: b.end.x + dx, y: b.end.y + dy },
-            leftSide: { ...b.leftSide, customPanels: undefined },
-            rightSide: { ...b.rightSide, customPanels: undefined },
-          };
-        });
-        return applyAutoCornerExtensions(moved, pixelsPerCm);
-      });
-    } else {
-      setBeams((prev) =>
-        prev.map((b) => {
-          if (b.boxGroupId !== boxGroupId) return b;
-          return {
-            ...b,
-            start: { x: b.start.x + dx, y: b.start.y + dy },
-            end: { x: b.end.x + dx, y: b.end.y + dy },
-          };
-        })
-      );
-    }
-  };
 
   const handleUngroupBox = (boxGroupId: string) => {
     updateBeamsWithHistory((prev) =>
@@ -651,6 +653,7 @@ export const App: React.FC = () => {
         <PlanCanvas
           canvasRef={canvasRef}
           pdfImageUrl={pdfImageUrl}
+          vectorLines={vectorLines}
           beams={beams}
           panels={panels}
           snapPoints={snapPoints}
@@ -662,7 +665,6 @@ export const App: React.FC = () => {
           onBatchMoveBeams={handleBatchMoveBeams}
           onDeleteBeam={handleDeleteBeam}
           onResizeBoxGroup={handleResizeBoxGroup}
-          onMoveBoxGroup={handleMoveBoxGroup}
           onUngroupBox={handleUngroupBox}
           activeTool={activeTool}
           onAddBeam={handleAddBeam}
@@ -685,6 +687,26 @@ export const App: React.FC = () => {
           onUngroupBox={handleUngroupBox}
         />
       </div>
+
+      {/* Multi-Page PDF Selection Modal */}
+      {pdfInspection && (
+        <PdfPageSelectorModal
+          isOpen={isPdfModalOpen}
+          totalPages={pdfInspection.totalPages}
+          pages={pdfInspection.pages}
+          fileName={pdfInspection.file.name}
+          onSelectPage={(pageNum) => {
+            if (pdfInspection.file) {
+              loadSpecificPdfPage(pdfInspection.file, pageNum);
+            }
+          }}
+          onClose={() => {
+            setIsPdfModalOpen(false);
+            setPdfInspection(null);
+          }}
+          isLoading={isLoadingPdfPage}
+        />
+      )}
     </div>
   );
 };

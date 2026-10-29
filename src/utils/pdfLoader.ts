@@ -166,14 +166,64 @@ export function extractLinesFromImageData(
   return lines;
 }
 
-export async function loadPdfFirstPage(file: File): Promise<LoadedPdfPlan> {
+export interface PdfPageSummary {
+  pageNumber: number;
+  thumbnailUrl: string;
+}
+
+export async function inspectPdfPages(file: File): Promise<{
+  totalPages: number;
+  pages: PdfPageSummary[];
+}> {
   const pdfjsLib = await import('pdfjs-dist');
   pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  const page = await pdf.getPage(1);
-  const viewport = page.getViewport({ scale: 1.5 });
+  const totalPages = pdf.numPages;
+
+  const pages: PdfPageSummary[] = [];
+  const maxInspectPages = Math.min(totalPages, 50);
+
+  for (let pageNum = 1; pageNum <= maxInspectPages; pageNum++) {
+    try {
+      const page = await pdf.getPage(pageNum);
+      const vp = page.getViewport({ scale: 0.28 });
+      const thumbCanvas = document.createElement('canvas');
+      thumbCanvas.width = Math.max(1, Math.round(vp.width));
+      thumbCanvas.height = Math.max(1, Math.round(vp.height));
+      const thumbCtx = thumbCanvas.getContext('2d');
+      if (thumbCtx) {
+        await page.render({ canvasContext: thumbCtx, viewport: vp }).promise;
+      }
+      pages.push({
+        pageNumber: pageNum,
+        thumbnailUrl: thumbCanvas.toDataURL('image/jpeg', 0.8),
+      });
+    } catch {
+      pages.push({
+        pageNumber: pageNum,
+        thumbnailUrl: '',
+      });
+    }
+  }
+
+  return { totalPages, pages };
+}
+
+export async function loadPdfPage(
+  file: File,
+  pageNumber = 1,
+  renderScale = 3.0
+): Promise<LoadedPdfPlan> {
+  const pdfjsLib = await import('pdfjs-dist');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const clampedPage = Math.min(Math.max(1, pageNumber), pdf.numPages);
+  const page = await pdf.getPage(clampedPage);
+  const viewport = page.getViewport({ scale: renderScale });
 
   const offscreen = document.createElement('canvas');
   offscreen.width = Math.round(viewport.width);
@@ -205,4 +255,8 @@ export async function loadPdfFirstPage(file: File): Promise<LoadedPdfPlan> {
     vectorLines,
     texts,
   };
+}
+
+export async function loadPdfFirstPage(file: File): Promise<LoadedPdfPlan> {
+  return loadPdfPage(file, 1, 3.0);
 }

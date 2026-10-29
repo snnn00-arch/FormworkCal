@@ -6,12 +6,14 @@ import {
   Point,
 } from '../types/formwork';
 import { SnapPoint } from '../engine/beamDetector';
+import { RawVectorLine } from '../engine/scaleCalibrator';
 import { getBeamLengthCm, getPlacedPanelPolygon } from '../engine/formworkOptimizer';
 import { ZoomIn, ZoomOut, RotateCcw, Upload, Trash2, Move, Scissors } from 'lucide-react';
 
 interface PlanCanvasProps {
   canvasRef: React.RefObject<HTMLCanvasElement>;
   pdfImageUrl: string | null;
+  vectorLines?: RawVectorLine[];
   beams: BeamElement[];
   panels: PlacedPanel[];
   snapPoints?: SnapPoint[];
@@ -20,10 +22,14 @@ interface PlanCanvasProps {
   selectedBeamIds?: string[];
   onSelectBeam: (beamId: string | null, isShift?: boolean) => void;
   onMoveBeam?: (beamId: string, newStart: Point, newEnd: Point, finalize?: boolean) => void;
-  onBatchMoveBeams?: (beamIds: string[], dx: number, dy: number, finalize?: boolean) => void;
+  onBatchMoveBeams?: (
+    origEdges: Array<{ id: string; start: Point; end: Point }>,
+    dx: number,
+    dy: number,
+    finalize?: boolean
+  ) => void;
   onDeleteBeam?: (beamId: string) => void;
   onResizeBoxGroup?: (boxGroupId: string, anchorPt: Point, newCornerPt: Point, finalize?: boolean) => void;
-  onMoveBoxGroup?: (boxGroupId: string, dx: number, dy: number, finalize?: boolean) => void;
   onUngroupBox?: (boxGroupId: string) => void;
   activeTool: DrawingToolMode | 'draw_beam';
   onAddBeam: (start: Point, end: Point, toolMode?: DrawingToolMode | 'draw_beam') => void;
@@ -99,6 +105,7 @@ function findNearestSnapPoint(
 export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   canvasRef,
   pdfImageUrl,
+  vectorLines = [],
   beams,
   panels,
   snapPoints = [],
@@ -110,7 +117,6 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   onBatchMoveBeams,
   onDeleteBeam,
   onResizeBoxGroup,
-  onMoveBoxGroup,
   onUngroupBox,
   activeTool,
   onAddBeam,
@@ -221,6 +227,20 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     // 2. Draw PDF Background if available
     if (pdfImage) {
       ctx.drawImage(pdfImage, 0, 0);
+    }
+
+    // 2b. Draw Crisp Native CAD Vector Lines Overlay (infinitely sharp at any zoom level)
+    if (vectorLines && vectorLines.length > 0) {
+      ctx.save();
+      ctx.strokeStyle = '#0F172A';
+      ctx.lineWidth = Math.max(0.75, 1.2 / zoom);
+      ctx.beginPath();
+      for (const line of vectorLines) {
+        ctx.moveTo(line.x1, line.y1);
+        ctx.lineTo(line.x2, line.y2);
+      }
+      ctx.stroke();
+      ctx.restore();
     }
 
     // 3. Draw ONLY Recognized Edge Lines (NO solid beam block covering the PDF plan!)
@@ -504,6 +524,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     activeSnap,
     dragState,
     pdfImage,
+    vectorLines,
     pan,
     zoom,
     selectedBeamId,
@@ -669,11 +690,13 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
             return;
           }
           if (effectiveSelectedIds.includes(parentBeam.id) && effectiveSelectedIds.length > 1) {
+            const movingBeams = beams.filter((b) => effectiveSelectedIds.includes(b.id));
             setDragState({
               beamId: parentBeam.id,
               mode: 'move_multi',
               multiBeamIds: effectiveSelectedIds,
-              startMouse: world,
+              origEdges: movingBeams.map((b) => ({ id: b.id, start: { ...b.start }, end: { ...b.end } })),
+              startMouse: rawWorld,
               origStart: { ...parentBeam.start },
               origEnd: { ...parentBeam.end },
               hasMoved: false,
@@ -682,11 +705,15 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
           }
           setSelectedPanelId(p.id);
           onSelectBeam(parentBeam.id, false);
+          const boxEdges = parentBeam.boxGroupId
+            ? beams.filter((b) => b.boxGroupId === parentBeam.boxGroupId)
+            : [parentBeam];
           setDragState({
             beamId: parentBeam.id,
             boxGroupId: parentBeam.boxGroupId,
             mode: parentBeam.boxGroupId ? 'move_box' : 'move_beam',
-            startMouse: world,
+            origEdges: boxEdges.map((b) => ({ id: b.id, start: { ...b.start }, end: { ...b.end } })),
+            startMouse: rawWorld,
             origStart: { ...parentBeam.start },
             origEnd: { ...parentBeam.end },
             hasMoved: false,
@@ -714,11 +741,13 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
           return;
         }
         if (effectiveSelectedIds.includes(foundBeam.id) && effectiveSelectedIds.length > 1) {
+          const movingBeams = beams.filter((b) => effectiveSelectedIds.includes(b.id));
           setDragState({
             beamId: foundBeam.id,
             mode: 'move_multi',
             multiBeamIds: effectiveSelectedIds,
-            startMouse: world,
+            origEdges: movingBeams.map((b) => ({ id: b.id, start: { ...b.start }, end: { ...b.end } })),
+            startMouse: rawWorld,
             origStart: { ...foundBeam.start },
             origEnd: { ...foundBeam.end },
             hasMoved: false,
@@ -727,11 +756,15 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         }
         setSelectedPanelId(null);
         onSelectBeam(foundBeam.id, false);
+        const boxEdges = foundBeam.boxGroupId
+          ? beams.filter((b) => b.boxGroupId === foundBeam.boxGroupId)
+          : [foundBeam];
         setDragState({
           beamId: foundBeam.id,
           boxGroupId: foundBeam.boxGroupId,
           mode: foundBeam.boxGroupId ? 'move_box' : 'move_beam',
-          startMouse: world,
+          origEdges: boxEdges.map((b) => ({ id: b.id, start: { ...b.start }, end: { ...b.end } })),
+          startMouse: rawWorld,
           origStart: { ...foundBeam.start },
           origEnd: { ...foundBeam.end },
           hasMoved: false,
@@ -779,17 +812,12 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       if (dragState.mode === 'resize_box_corner' && onResizeBoxGroup && dragState.anchorPt && dragState.boxGroupId) {
         const cornerPt = nearestSnap ? { x: nearestSnap.x, y: nearestSnap.y } : rawWorld;
         onResizeBoxGroup(dragState.boxGroupId, dragState.anchorPt, cornerPt, false);
-      } else if (dragState.mode === 'move_multi' && onBatchMoveBeams && dragState.multiBeamIds) {
-        onBatchMoveBeams(dragState.multiBeamIds, dx, dy, false);
-      } else if (dragState.mode === 'move_box' && onMoveBoxGroup && dragState.boxGroupId) {
-        onMoveBoxGroup(dragState.boxGroupId, dx, dy, false);
-      } else if (dragState.mode === 'move_beam' && onMoveBeam) {
-        onMoveBeam(
-          dragState.beamId,
-          { x: dragState.origStart.x + dx, y: dragState.origStart.y + dy },
-          { x: dragState.origEnd.x + dx, y: dragState.origEnd.y + dy },
-          false
-        );
+      } else if (
+        (dragState.mode === 'move_multi' || dragState.mode === 'move_box' || dragState.mode === 'move_beam') &&
+        onBatchMoveBeams &&
+        dragState.origEdges
+      ) {
+        onBatchMoveBeams(dragState.origEdges, dx, dy, false);
       } else if (dragState.mode === 'move_start' && onMoveBeam) {
         let nextStart = nearestSnap
           ? { x: nearestSnap.x, y: nearestSnap.y }
@@ -830,20 +858,21 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     }
   };
 
-  const handleMouseUp = () => {
+  const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (dragState) {
       if (dragState.hasMoved) {
+        const rawWorld = screenToWorld(e.clientX, e.clientY);
         if (dragState.mode === 'resize_box_corner' && onResizeBoxGroup && dragState.anchorPt && dragState.boxGroupId) {
           const cornerPt = activeSnap ? { x: activeSnap.x, y: activeSnap.y } : currentMousePos || { x: 0, y: 0 };
           onResizeBoxGroup(dragState.boxGroupId, dragState.anchorPt, cornerPt, true);
-        } else if (dragState.mode === 'move_multi' && onBatchMoveBeams && dragState.multiBeamIds) {
-          const dx = currentMousePos ? currentMousePos.x - dragState.startMouse.x : 0;
-          const dy = currentMousePos ? currentMousePos.y - dragState.startMouse.y : 0;
-          onBatchMoveBeams(dragState.multiBeamIds, dx, dy, true);
-        } else if (dragState.mode === 'move_box' && onMoveBoxGroup && dragState.boxGroupId) {
-          const dx = currentMousePos ? currentMousePos.x - dragState.startMouse.x : 0;
-          const dy = currentMousePos ? currentMousePos.y - dragState.startMouse.y : 0;
-          onMoveBoxGroup(dragState.boxGroupId, dx, dy, true);
+        } else if (
+          (dragState.mode === 'move_multi' || dragState.mode === 'move_box' || dragState.mode === 'move_beam') &&
+          onBatchMoveBeams &&
+          dragState.origEdges
+        ) {
+          const dx = rawWorld.x - dragState.startMouse.x;
+          const dy = rawWorld.y - dragState.startMouse.y;
+          onBatchMoveBeams(dragState.origEdges, dx, dy, true);
         } else if (onMoveBeam) {
           const targetBeam = beams.find((b) => b.id === dragState.beamId);
           if (targetBeam) {
