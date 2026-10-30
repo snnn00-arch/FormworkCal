@@ -1906,13 +1906,20 @@ export function autoDetectBeamsWithDiagnostics(
   }
 
   // =========================================================================
+  // PASS 4.5: Merge Contiguous Collinear Beams (รวมแนวคานหลักต่อเนื่องบนเส้นกริดเดียวกัน)
+  // Ensures continuous structural spans across multiple bays are processed holistically,
+  // allowing formwork to run continuously through columns when no perpendicular beam branches out.
+  // =========================================================================
+  const mergedBeams = mergeContiguousCollinearBeams(beams, tJunctionSnapTol);
+
+  // =========================================================================
   // PASS 5: Convert Detected Structural Spans into Individual Formwork Sides (ไม้แบบแต่ละด้าน)
   // Abolishes the 2-sided beam object ("คาน") in output: creates independent single_edge
   // formwork lines for each side (บน, ล่าง, ซ้าย, ขวา) and carves out T-junction / Cross-junction
   // openings so formwork never covers intersecting secondary beams (คานซอย).
   // =========================================================================
   const formworkSides = convertDetectedBeamsToFormworkSides(
-    beams,
+    mergedBeams,
     safeScale,
     gridIntersections,
     texts,
@@ -2043,9 +2050,105 @@ export function extractColumnObstacles(
 }
 
 /**
- * Splits each detected beam span into independent single_edge formwork sides (ไม้แบบแต่ละด้าน: บน/ล่าง or ซ้าย/ขวา)
- * and automatically carves out perpendicular beam intersections (L-corners, T-junction คานซอย, Cross-junctions)
- * and column faces, strictly ensuring formwork never penetrates into columns or beams.
+ * Merges contiguous collinear raw beams along the same structural axis line.
+ * For example, consecutive bays of Beam B1 along Grid A (Bay 1-2, Bay 2-3, Bay 3-4)
+ * merge into a continuous structural beam line (Grid 1 to 4).
+ */
+export function mergeContiguousCollinearBeams(
+  rawBeams: BeamElement[],
+  tol: number = 25
+): BeamElement[] {
+  const merged: BeamElement[] = [];
+  const used = new Set<string>();
+
+  // Sort beams: horizontals first (by y then minX), then verticals (by x then minY)
+  const sorted = [...rawBeams].sort((a, b) => {
+    const isAH = Math.abs(a.end.x - a.start.x) >= Math.abs(a.end.y - a.start.y);
+    const isBH = Math.abs(b.end.x - b.start.x) >= Math.abs(b.end.y - b.start.y);
+    if (isAH !== isBH) return isAH ? -1 : 1;
+    if (isAH) {
+      const yDiff = a.start.y - b.start.y;
+      if (Math.abs(yDiff) > 6) return yDiff;
+      return Math.min(a.start.x, a.end.x) - Math.min(b.start.x, b.end.x);
+    } else {
+      const xDiff = a.start.x - b.start.x;
+      if (Math.abs(xDiff) > 6) return xDiff;
+      return Math.min(a.start.y, a.end.y) - Math.min(b.start.y, b.end.y);
+    }
+  });
+
+  for (let i = 0; i < sorted.length; i++) {
+    const b1 = sorted[i];
+    if (used.has(b1.id)) continue;
+
+    const isH = Math.abs(b1.end.x - b1.start.x) >= Math.abs(b1.end.y - b1.start.y);
+    let curStart = { ...b1.start };
+    let curEnd = { ...b1.end };
+    let curName = b1.name;
+    const curHeight = b1.defaultHeightCm;
+    const curWidth = b1.widthCm || DEFAULT_BEAM_WIDTH_CM;
+
+    used.add(b1.id);
+
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (let j = 0; j < sorted.length; j++) {
+        if (j === i) continue;
+        const b2 = sorted[j];
+        if (used.has(b2.id)) continue;
+        const b2IsH = Math.abs(b2.end.x - b2.start.x) >= Math.abs(b2.end.y - b2.start.y);
+        if (b2IsH !== isH) continue;
+
+        if (isH) {
+          const y1 = (curStart.y + curEnd.y) / 2;
+          const y2 = (b2.start.y + b2.end.y) / 2;
+          if (Math.abs(y1 - y2) > 8) continue;
+
+          const minX1 = Math.min(curStart.x, curEnd.x);
+          const maxX1 = Math.max(curStart.x, curEnd.x);
+          const minX2 = Math.min(b2.start.x, b2.end.x);
+          const maxX2 = Math.max(b2.start.x, b2.end.x);
+
+          // Contiguous or overlapping along the same line
+          if (minX2 <= maxX1 + tol && maxX2 >= minX1 - tol) {
+            curStart = { x: Math.min(minX1, minX2), y: y1 };
+            curEnd = { x: Math.max(maxX1, maxX2), y: y1 };
+            used.add(b2.id);
+            expanded = true;
+          }
+        } else {
+          const x1 = (curStart.x + curEnd.x) / 2;
+          const x2 = (b2.start.x + b2.end.x) / 2;
+          if (Math.abs(x1 - x2) > 8) continue;
+
+          const minY1 = Math.min(curStart.y, curEnd.y);
+          const maxY1 = Math.max(curStart.y, curEnd.y);
+          const minY2 = Math.min(b2.start.y, b2.end.y);
+          const maxY2 = Math.max(b2.start.y, b2.end.y);
+
+          // Contiguous or overlapping along the same line
+          if (minY2 <= maxY1 + tol && maxY2 >= minY1 - tol) {
+            curStart = { x: x1, y: Math.min(minY1, minY2) };
+            curEnd = { x: x1, y: Math.max(maxY1, maxY2) };
+            used.add(b2.id);
+            expanded = true;
+          }
+        }
+      }
+    }
+
+    merged.push(createBeamElement(curName, curStart, curEnd, curHeight, curWidth));
+  }
+
+  return merged;
+}
+
+/**
+ * Splits each detected beam span into independent single_edge formwork sides (ไม้แบบแต่ละด้าน: บน/ล่าง or ซ้าย/ขวา).
+ * When encountering a column:
+ * - If there is NO perpendicular beam on that side, formwork continues straight through ("ลากแบบต่อได้เลย" & "กับวงรอบนอกสุด ไม่ต้องหยุดตรงเสา").
+ * - If there IS a perpendicular beam on that side, formwork stops flush at the perpendicular beam and carves out the opening ("แต่ถ้าเจอเสา แต่มีคาน ต้องไม่ให้แบบข้ามคาน").
  */
 export function convertDetectedBeamsToFormworkSides(
   rawBeams: BeamElement[],
@@ -2087,30 +2190,6 @@ export function convertDetectedBeamsToFormworkSides(
       let botEndX = bMaxX;
       const botCutouts: Array<{ start: number; end: number }> = [];
 
-      // 1. Trim against Column Obstacles (เสาคอนกรีต)
-      // Formwork must butt flush against column faces and never penetrate inside column boundaries
-      for (const col of columnObstacles) {
-        if (col.minY <= botY + tol * 0.5 && col.maxY >= topY - tol * 0.5) {
-          // Column at start of beam
-          if (col.minX <= bMinX + tol && col.maxX >= bMinX - tol) {
-            topStartX = Math.max(topStartX, col.maxX);
-            botStartX = Math.max(botStartX, col.maxX);
-          }
-          // Column at end of beam
-          if (col.maxX >= bMaxX - tol && col.minX <= bMaxX + tol) {
-            topEndX = Math.min(topEndX, col.minX);
-            botEndX = Math.min(botEndX, col.minX);
-          }
-          // Column in beam interior (continuous beam passing across an intermediate column)
-          if (col.minX > bMinX + tol && col.maxX < bMaxX - tol) {
-            topCutouts.push({ start: col.minX, end: col.maxX });
-            botCutouts.push({ start: col.minX, end: col.maxX });
-          }
-        }
-      }
-
-      // 2. Trim against Perpendicular Beams (คานขวาง / คานซอย / คานหลัก)
-      // Formwork must stop flush at the face of perpendicular beams and carve out beam junctions
       for (const other of rawBeams) {
         if (other.id === b.id) continue;
         const otherIsH = Math.abs(other.end.x - other.start.x) >= Math.abs(other.end.y - other.start.y);
@@ -2127,29 +2206,62 @@ export function convertDetectedBeamsToFormworkSides(
           bY >= oMinY - halfW - tol &&
           bY <= oMaxY + halfW + tol
         ) {
-          const goesUp = oMinY < topY + tol * 0.25;
-          const goesDown = oMaxY > botY - tol * 0.25;
+          const nearCol = columnObstacles.find(
+            (c) => Math.abs(c.cx - oX) <= tol && Math.abs(c.cy - bY) <= tol
+          );
+          const cutHalfW = nearCol ? Math.max(oHalfW, nearCol.halfW) : oHalfW;
 
-          // Beam b starts at perpendicular beam 'other'
-          if (Math.abs(oX - bMinX) <= oHalfW + tol && bMaxX > oX + oHalfW + minSegLen) {
-            topStartX = Math.max(topStartX, oX + oHalfW);
-            botStartX = Math.max(botStartX, oX + oHalfW);
+          const goesUp = oMinY < topY - tol * 0.25;
+          const goesDown = oMaxY > botY + tol * 0.25;
+
+          const atStart = Math.abs(oX - bMinX) <= oHalfW + tol;
+          const atEnd = Math.abs(oX - bMaxX) <= oHalfW + tol;
+
+          // Start of beam b
+          if (atStart) {
+            // Top side: if a beam goes up, stop flush at inner face; if no beam goes up, extend to outer face
+            if (goesUp) {
+              topStartX = Math.max(topStartX, oX + cutHalfW);
+            } else {
+              topStartX = Math.min(topStartX, oX - cutHalfW);
+            }
+
+            // Bottom side: if a beam goes down, stop flush at inner face; if no beam goes down, extend to outer face
+            if (goesDown) {
+              botStartX = Math.max(botStartX, oX + cutHalfW);
+            } else {
+              botStartX = Math.min(botStartX, oX - cutHalfW);
+            }
           }
 
-          // Beam b ends at perpendicular beam 'other'
-          if (Math.abs(oX - bMaxX) <= oHalfW + tol && bMinX < oX - oHalfW - minSegLen) {
-            topEndX = Math.min(topEndX, oX - oHalfW);
-            botEndX = Math.min(botEndX, oX - oHalfW);
+          // End of beam b
+          if (atEnd) {
+            // Top side: if a beam goes up, stop flush at inner face; if no beam goes up, extend to outer face
+            if (goesUp) {
+              topEndX = Math.min(topEndX, oX - cutHalfW);
+            } else {
+              topEndX = Math.max(topEndX, oX + cutHalfW);
+            }
+
+            // Bottom side: if a beam goes down, stop flush at inner face; if no beam goes down, extend to outer face
+            if (goesDown) {
+              botEndX = Math.min(botEndX, oX - cutHalfW);
+            } else {
+              botEndX = Math.max(botEndX, oX + cutHalfW);
+            }
           }
 
-          // Perpendicular beam connects into b's top side (คานซอย วิ่งเข้าด้านบน)
-          if (goesUp && oX > bMinX + oHalfW + tol * 0.5 && oX < bMaxX - oHalfW - tol * 0.5) {
-            topCutouts.push({ start: oX - oHalfW, end: oX + oHalfW });
-          }
-
-          // Perpendicular beam connects into b's bottom side (คานซอย วิ่งเข้าด้านล่าง)
-          if (goesDown && oX > bMinX + oHalfW + tol * 0.5 && oX < bMaxX - oHalfW - tol * 0.5) {
-            botCutouts.push({ start: oX - oHalfW, end: oX + oHalfW });
+          // Interior of beam b
+          if (!atStart && !atEnd) {
+            // If perpendicular beam goes up on top side: must not cross the beam!
+            if (goesUp) {
+              topCutouts.push({ start: oX - cutHalfW, end: oX + cutHalfW });
+            }
+            // If perpendicular beam goes down on bottom side: must not cross the beam!
+            if (goesDown) {
+              botCutouts.push({ start: oX - cutHalfW, end: oX + cutHalfW });
+            }
+            // If no beam goes up/down: NO cutout is added! Formwork continues straight through!
           }
         }
       }
@@ -2204,30 +2316,6 @@ export function convertDetectedBeamsToFormworkSides(
       let rightEndY = bMaxY;
       const rightCutouts: Array<{ start: number; end: number }> = [];
 
-      // 1. Trim against Column Obstacles (เสาคอนกรีต)
-      // Formwork must butt flush against column faces and never penetrate inside column boundaries
-      for (const col of columnObstacles) {
-        if (col.minX <= rightX + tol * 0.5 && col.maxX >= leftX - tol * 0.5) {
-          // Column at start of beam
-          if (col.minY <= bMinY + tol && col.maxY >= bMinY - tol) {
-            leftStartY = Math.max(leftStartY, col.maxY);
-            rightStartY = Math.max(rightStartY, col.maxY);
-          }
-          // Column at end of beam
-          if (col.maxY >= bMaxY - tol && col.minY <= bMaxY + tol) {
-            leftEndY = Math.min(leftEndY, col.minY);
-            rightEndY = Math.min(rightEndY, col.minY);
-          }
-          // Column in beam interior (continuous beam passing across an intermediate column)
-          if (col.minY > bMinY + tol && col.maxY < bMaxY - tol) {
-            leftCutouts.push({ start: col.minY, end: col.maxY });
-            rightCutouts.push({ start: col.minY, end: col.maxY });
-          }
-        }
-      }
-
-      // 2. Trim against Perpendicular Beams (คานขวาง / คานซอย / คานหลัก)
-      // Formwork must stop flush at the face of perpendicular beams and carve out beam junctions
       for (const other of rawBeams) {
         if (other.id === b.id) continue;
         const otherIsH = Math.abs(other.end.x - other.start.x) >= Math.abs(other.end.y - other.start.y);
@@ -2244,29 +2332,59 @@ export function convertDetectedBeamsToFormworkSides(
           bX >= oMinX - halfW - tol &&
           bX <= oMaxX + halfW + tol
         ) {
-          const goesLeft = oMinX < leftX + tol * 0.25;
-          const goesRight = oMaxX > rightX - tol * 0.25;
+          const nearCol = columnObstacles.find(
+            (c) => Math.abs(c.cx - bX) <= tol && Math.abs(c.cy - oY) <= tol
+          );
+          const cutHalfW = nearCol ? Math.max(oHalfW, nearCol.halfH) : oHalfW;
 
-          // Beam b starts at perpendicular beam 'other'
-          if (Math.abs(oY - bMinY) <= oHalfW + tol && bMaxY > oY + oHalfW + minSegLen) {
-            leftStartY = Math.max(leftStartY, oY + oHalfW);
-            rightStartY = Math.max(rightStartY, oY + oHalfW);
+          const goesLeft = oMinX < leftX - tol * 0.25;
+          const goesRight = oMaxX > rightX + tol * 0.25;
+
+          const atStart = Math.abs(oY - bMinY) <= oHalfW + tol;
+          const atEnd = Math.abs(oY - bMaxY) <= oHalfW + tol;
+
+          // Start of beam b
+          if (atStart) {
+            // Left side
+            if (goesLeft) {
+              leftStartY = Math.max(leftStartY, oY + cutHalfW);
+            } else {
+              leftStartY = Math.min(leftStartY, oY - cutHalfW);
+            }
+
+            // Right side
+            if (goesRight) {
+              rightStartY = Math.max(rightStartY, oY + cutHalfW);
+            } else {
+              rightStartY = Math.min(rightStartY, oY - cutHalfW);
+            }
           }
 
-          // Beam b ends at perpendicular beam 'other'
-          if (Math.abs(oY - bMaxY) <= oHalfW + tol && bMinY < oY - oHalfW - minSegLen) {
-            leftEndY = Math.min(leftEndY, oY - oHalfW);
-            rightEndY = Math.min(rightEndY, oY - oHalfW);
+          // End of beam b
+          if (atEnd) {
+            // Left side
+            if (goesLeft) {
+              leftEndY = Math.min(leftEndY, oY - cutHalfW);
+            } else {
+              leftEndY = Math.max(leftEndY, oY + cutHalfW);
+            }
+
+            // Right side
+            if (goesRight) {
+              rightEndY = Math.min(rightEndY, oY - cutHalfW);
+            } else {
+              rightEndY = Math.max(rightEndY, oY + cutHalfW);
+            }
           }
 
-          // Perpendicular beam connects into b's left side (คานซอย วิ่งเข้าด้านซ้าย)
-          if (goesLeft && oY > bMinY + oHalfW + tol * 0.5 && oY < bMaxY - oHalfW - tol * 0.5) {
-            leftCutouts.push({ start: oY - oHalfW, end: oY + oHalfW });
-          }
-
-          // Perpendicular beam connects into b's right side (คานซอย วิ่งเข้าด้านขวา)
-          if (goesRight && oY > bMinY + oHalfW + tol * 0.5 && oY < bMaxY - oHalfW - tol * 0.5) {
-            rightCutouts.push({ start: oY - oHalfW, end: oY + oHalfW });
+          // Interior of beam b
+          if (!atStart && !atEnd) {
+            if (goesLeft) {
+              leftCutouts.push({ start: oY - cutHalfW, end: oY + cutHalfW });
+            }
+            if (goesRight) {
+              rightCutouts.push({ start: oY - cutHalfW, end: oY + cutHalfW });
+            }
           }
         }
       }
@@ -2309,7 +2427,144 @@ export function convertDetectedBeamsToFormworkSides(
     }
   }
 
-  return groupClosedInnerBayLoops(sides, safeScale);
+  const mergedSides = mergeCollinearFormworkSides(sides, rawBeams, safeScale);
+  return groupClosedInnerBayLoops(mergedSides, safeScale);
+}
+
+/**
+ * Merges collinear contiguous formwork sides on the same line that are not blocked by a perpendicular beam.
+ * When encountering a column with NO perpendicular beam on that side, the formwork continues straight through ("ลากแบบต่อได้เลย").
+ */
+export function mergeCollinearFormworkSides(
+  sides: BeamElement[],
+  rawBeams: BeamElement[],
+  safeScale: number
+): BeamElement[] {
+  const tol = Math.max(25, 28 * safeScale);
+  const result: BeamElement[] = [];
+  const used = new Set<string>();
+
+  for (let i = 0; i < sides.length; i++) {
+    const s1 = sides[i];
+    if (used.has(s1.id) || s1.boxGroupId) {
+      if (!used.has(s1.id)) result.push(s1);
+      continue;
+    }
+
+    const isH = Math.abs(s1.end.x - s1.start.x) >= Math.abs(s1.end.y - s1.start.y);
+    let curStart = { ...s1.start };
+    let curEnd = { ...s1.end };
+    let curName = s1.name;
+    used.add(s1.id);
+
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (let j = 0; j < sides.length; j++) {
+        if (j === i) continue;
+        const s2 = sides[j];
+        if (used.has(s2.id) || s2.boxGroupId) continue;
+        const s2IsH = Math.abs(s2.end.x - s2.start.x) >= Math.abs(s2.end.y - s2.start.y);
+        if (s2IsH !== isH) continue;
+        if (s2.defaultHeightCm !== s1.defaultHeightCm) continue;
+
+        if (isH) {
+          const y1 = (curStart.y + curEnd.y) / 2;
+          const y2 = (s2.start.y + s2.end.y) / 2;
+          if (Math.abs(y1 - y2) > 4) continue;
+
+          // Check if s1 and s2 have the same side role (both top or both bottom)
+          const s1IsTop = s1.name.includes('-บน');
+          const s2IsTop = s2.name.includes('-บน');
+          if (s1IsTop !== s2IsTop) continue;
+
+          const minX1 = Math.min(curStart.x, curEnd.x);
+          const maxX1 = Math.max(curStart.x, curEnd.x);
+          const minX2 = Math.min(s2.start.x, s2.end.x);
+          const maxX2 = Math.max(s2.start.x, s2.end.x);
+
+          const gapMin = Math.min(maxX1, maxX2);
+          const gapMax = Math.max(minX1, minX2);
+          if (gapMax - gapMin <= tol) {
+            // Check if ANY perpendicular beam crosses on this side between gapMin and gapMax
+            const hasPerpBeam = rawBeams.some((b) => {
+              const bIsH = Math.abs(b.end.x - b.start.x) >= Math.abs(b.end.y - b.start.y);
+              if (bIsH) return false;
+              const oX = (b.start.x + b.end.x) / 2;
+              const oMinY = Math.min(b.start.y, b.end.y);
+              const oMaxY = Math.max(b.start.y, b.end.y);
+              if (oX < gapMin - 5 || oX > gapMax + 5) return false;
+              if (s1IsTop) {
+                return oMinY < y1 - 2;
+              } else {
+                return oMaxY > y1 + 2;
+              }
+            });
+
+            if (!hasPerpBeam) {
+              curStart = { x: Math.min(minX1, minX2), y: y1 };
+              curEnd = { x: Math.max(maxX1, maxX2), y: y1 };
+              curName = s1IsTop ? `${s1.name.split('-')[0]}-บน` : `${s1.name.split('-')[0]}-ล่าง`;
+              used.add(s2.id);
+              expanded = true;
+            }
+          }
+        } else {
+          const x1 = (curStart.x + curEnd.x) / 2;
+          const x2 = (s2.start.x + s2.end.x) / 2;
+          if (Math.abs(x1 - x2) > 4) continue;
+
+          const s1IsLeft = s1.name.includes('-ซ้าย');
+          const s2IsLeft = s2.name.includes('-ซ้าย');
+          if (s1IsLeft !== s2IsLeft) continue;
+
+          const minY1 = Math.min(curStart.y, curEnd.y);
+          const maxY1 = Math.max(curStart.y, curEnd.y);
+          const minY2 = Math.min(s2.start.y, s2.end.y);
+          const maxY2 = Math.max(b2Y(s2));
+
+          function b2Y(it: BeamElement) {
+            return Math.max(it.start.y, it.end.y);
+          }
+
+          const gapMin = Math.min(maxY1, maxY2);
+          const gapMax = Math.max(minY1, minY2);
+          if (gapMax - gapMin <= tol) {
+            const hasPerpBeam = rawBeams.some((b) => {
+              const bIsH = Math.abs(b.end.x - b.start.x) >= Math.abs(b.end.y - b.start.y);
+              if (!bIsH) return false;
+              const oY = (b.start.y + b.end.y) / 2;
+              const oMinX = Math.min(b.start.x, b.end.x);
+              const oMaxX = Math.max(b.start.x, b.end.x);
+              if (oY < gapMin - 5 || oY > gapMax + 5) return false;
+              if (s1IsLeft) {
+                return oMinX < x1 - 2;
+              } else {
+                return oMaxX > x1 + 2;
+              }
+            });
+
+            if (!hasPerpBeam) {
+              curStart = { x: x1, y: Math.min(minY1, minY2) };
+              curEnd = { x: x1, y: Math.max(maxY1, maxY2) };
+              curName = s1IsLeft ? `${s1.name.split('-')[0]}-ซ้าย` : `${s1.name.split('-')[0]}-ขวา`;
+              used.add(s2.id);
+              expanded = true;
+            }
+          }
+        }
+      }
+    }
+
+    result.push({
+      ...s1,
+      name: curName,
+      start: curStart,
+      end: curEnd,
+    });
+  }
+
+  return result;
 }
 
 /**

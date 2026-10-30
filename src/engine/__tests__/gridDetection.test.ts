@@ -246,27 +246,46 @@ describe('Grid-First Detection and Grid Intersections', () => {
     const diag = autoDetectBeamsWithDiagnostics([], 1.5, 50, texts, pageDims, circles);
     expect(diag.beams.length).toBeGreaterThan(0);
 
-    // Verify anti-penetration into columns:
-    // 1. Bay 1 (Grid 1 to 2): formwork on both sides must span flush between Column 1 face (122) and Column 2 face (243)
-    const bay1Top = diag.beams.find((b) => b.name === 'B1-บน' && Math.round(b.start.x) === 122);
-    expect(bay1Top).toBeDefined();
-    expect(Math.round(bay1Top!.end.x)).toBe(243);
+    console.log('--- ALL DIAG BEAMS (' + diag.beams.length + ') ---');
+    diag.beams.forEach((b) => {
+      console.log(`${b.name} | (${Math.round(b.start.x)}, ${Math.round(b.start.y)}) -> (${Math.round(b.end.x)}, ${Math.round(b.end.y)}) | group:${b.boxGroupId}`);
+    });
 
-    const bay1Bot = diag.beams.find((b) => b.name === 'B1-ล่าง' && Math.round(b.start.x) === 122);
+    // 1. Top outer perimeter formwork (B1-บน) must run continuous from corner to corner without stopping at intermediate columns
+    const topOuter = diag.beams.find((b) => b.name === 'B1-บน');
+    expect(topOuter).toBeDefined();
+    expect(Math.round(topOuter!.start.x)).toBe(92);
+    expect(Math.round(topOuter!.end.x)).toBe(817);
+
+    // 2. Left outer perimeter formwork (B1-ซ้าย) must run continuous along outer edge
+    const leftOuter = diag.beams.find((b) => b.name === 'B1-ซ้าย');
+    expect(leftOuter).toBeDefined();
+    expect(Math.round(leftOuter!.start.y)).toBe(292);
+    expect(Math.round(leftOuter!.end.y)).toBe(567);
+
+    // 3. Bottom outer perimeter formwork (B1-ล่าง) must run continuous along outer edge
+    const botOuter = diag.beams.find((b) => b.name === 'B1-ล่าง' && Math.round(b.start.y) === 567);
+    expect(botOuter).toBeDefined();
+    expect(Math.round(botOuter!.start.x)).toBe(92);
+    expect(Math.round(botOuter!.end.x)).toBe(802);
+
+    // 4. Inner bays: formwork must stop flush at perpendicular beams
+    // Bay 1 (Grid 1 to 2): inner bottom formwork of B1 spans flush between Column 1 (122) and Beam B7 / Column 2 (243)
+    const bay1Bot = diag.beams.find((b) => b.name.startsWith('B1-ล่าง') && Math.round(b.start.x) === 122);
     expect(bay1Bot).toBeDefined();
     expect(Math.round(bay1Bot!.end.x)).toBe(243);
 
-    // 2. Bay 2 (Grid 2 to 3): formwork on both sides must span flush between Column 2 face (273) and Column 3 face (394)
-    const bay2Top = diag.beams.find((b) => b.name === 'B1-บน' && Math.round(b.start.x) === 273);
-    expect(bay2Top).toBeDefined();
-    expect(Math.round(bay2Top!.end.x)).toBe(394);
+    // Bay 2 (Grid 2 to 3): inner bottom formwork of B1 spans flush between Beam B7 / Column 2 (273) and Beam B1 / Column 3 (394)
+    const bay2Bot = diag.beams.find((b) => b.name.startsWith('B1-ล่าง') && Math.round(b.start.x) === 273);
+    expect(bay2Bot).toBeDefined();
+    expect(Math.round(bay2Bot!.end.x)).toBe(394);
 
-    // 3. Verify no formwork penetrates inside Column 2 concrete [244, 272] along Grid A (y ≈ 292 or y ≈ 322)
+    // 5. Verify inner formwork never penetrates inside Column 2 concrete [244, 272] along Grid A (y ≈ 322)
     const penetratesCol2 = diag.beams.some((b) => {
       const isH = Math.abs(b.end.x - b.start.x) >= Math.abs(b.end.y - b.start.y);
       if (!isH) return false;
       const y = (b.start.y + b.end.y) / 2;
-      if (Math.abs(y - 292) > 5 && Math.abs(y - 322) > 5) return false;
+      if (Math.abs(y - 322) > 5) return false;
       const minX = Math.min(b.start.x, b.end.x);
       const maxX = Math.max(b.start.x, b.end.x);
       return minX < 250 && maxX > 265;
@@ -291,19 +310,19 @@ describe('Grid-First Detection and Grid Intersections', () => {
     // Secondary beam B2 is at x = 250, width 20cm (x in [240, 260]), meeting B1 at y = 200 and extending to y = 350
     const sides = convertDetectedBeamsToFormworkSides(rawBeams, safeScale, intersections);
 
-    // 1. B1 formwork must start at Column 1 right face (110) and end at Column 2 left face (390)
+    // 1. B1 top side has NO perpendicular beam going up: formwork runs continuous from corner to corner (100 to 400)
     const b1Top = sides.find((s) => s.name.startsWith('B1-บน'));
     expect(b1Top).toBeDefined();
-    expect(b1Top!.start.x).toBe(110);
-    expect(b1Top!.end.x).toBe(390);
+    expect(b1Top!.start.x).toBe(100);
+    expect(b1Top!.end.x).toBe(400);
 
-    // 2. B1 bottom formwork must have a cutout for secondary beam B2 [240, 260]
+    // 2. B1 bottom formwork has perpendicular beam B2 [240, 260]: it must stop flush and NOT cross B2
     const b1BotSegs = sides.filter((s) => s.name.startsWith('B1-ล่าง'));
     expect(b1BotSegs.length).toBe(2);
-    expect(b1BotSegs[0].start.x).toBe(110);
+    expect(b1BotSegs[0].start.x).toBe(100);
     expect(b1BotSegs[0].end.x).toBe(240);
     expect(b1BotSegs[1].start.x).toBe(260);
-    expect(b1BotSegs[1].end.x).toBe(390);
+    expect(b1BotSegs[1].end.x).toBe(400);
 
     // 3. Secondary beam B2 formwork must start at the bottom face of B1 (210) and NOT penetrate into B1 (y < 210)
     const b2Left = sides.find((s) => s.name.startsWith('B2-ซ้าย'));
