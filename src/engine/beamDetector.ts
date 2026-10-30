@@ -2440,7 +2440,8 @@ export function mergeCollinearFormworkSides(
   rawBeams: BeamElement[],
   safeScale: number
 ): BeamElement[] {
-  const tol = Math.max(25, 28 * safeScale);
+  const tol = Math.max(35, 42 * safeScale);
+  const coordTol = Math.max(5, 6 * safeScale);
   const result: BeamElement[] = [];
   const used = new Set<string>();
 
@@ -2471,7 +2472,7 @@ export function mergeCollinearFormworkSides(
         if (isH) {
           const y1 = (curStart.y + curEnd.y) / 2;
           const y2 = (s2.start.y + s2.end.y) / 2;
-          if (Math.abs(y1 - y2) > 4) continue;
+          if (Math.abs(y1 - y2) > coordTol) continue;
 
           // Check if s1 and s2 have the same side role (both top or both bottom)
           const s1IsTop = s1.name.includes('-บน');
@@ -2512,7 +2513,7 @@ export function mergeCollinearFormworkSides(
         } else {
           const x1 = (curStart.x + curEnd.x) / 2;
           const x2 = (s2.start.x + s2.end.x) / 2;
-          if (Math.abs(x1 - x2) > 4) continue;
+          if (Math.abs(x1 - x2) > coordTol) continue;
 
           const s1IsLeft = s1.name.includes('-ซ้าย');
           const s2IsLeft = s2.name.includes('-ซ้าย');
@@ -2521,11 +2522,7 @@ export function mergeCollinearFormworkSides(
           const minY1 = Math.min(curStart.y, curEnd.y);
           const maxY1 = Math.max(curStart.y, curEnd.y);
           const minY2 = Math.min(s2.start.y, s2.end.y);
-          const maxY2 = Math.max(b2Y(s2));
-
-          function b2Y(it: BeamElement) {
-            return Math.max(it.start.y, it.end.y);
-          }
+          const maxY2 = Math.max(s2.start.y, s2.end.y);
 
           const gapMin = Math.min(maxY1, maxY2);
           const gapMax = Math.max(minY1, minY2);
