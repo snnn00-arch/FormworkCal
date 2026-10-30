@@ -7,9 +7,13 @@ import {
   extractGridIntersections,
   extractColumnSnapPoints,
   autoDetectBeamsWithDiagnostics,
+  convertDetectedBeamsToFormworkSides,
+  createBeamElement,
   ClassifiedLine,
   GridAxis,
+  GridIntersection,
 } from '../beamDetector';
+import { BeamElement } from '../../types/formwork';
 import { RawTextItem, RawVectorLine, RawVectorCircle } from '../scaleCalibrator';
 import { extractCirclesFromOperatorList } from '../../utils/pdfLoader';
 
@@ -221,6 +225,9 @@ describe('Grid-First Detection and Grid Intersections', () => {
       }
     }
 
+    const colTexts = texts.filter((t) => /^(?:C|เสา)[-_\s]?\d+/i.test(t.text));
+    console.log(`Column texts count: ${colTexts.length}`, colTexts.slice(0, 10));
+
     const pageDims = { width: viewport.width, height: viewport.height };
     const axes = extractGridAxes([], texts, circles, pageDims);
 
@@ -235,5 +242,76 @@ describe('Grid-First Detection and Grid Intersections', () => {
 
     const intersections = extractGridIntersections(axes);
     expect(intersections.length).toBe(24);
+
+    const diag = autoDetectBeamsWithDiagnostics([], 1.5, 50, texts, pageDims, circles);
+    expect(diag.beams.length).toBeGreaterThan(0);
+
+    // Verify anti-penetration into columns:
+    // 1. Bay 1 (Grid 1 to 2): formwork on both sides must span flush between Column 1 face (122) and Column 2 face (243)
+    const bay1Top = diag.beams.find((b) => b.name === 'B1-บน' && Math.round(b.start.x) === 122);
+    expect(bay1Top).toBeDefined();
+    expect(Math.round(bay1Top!.end.x)).toBe(243);
+
+    const bay1Bot = diag.beams.find((b) => b.name === 'B1-ล่าง' && Math.round(b.start.x) === 122);
+    expect(bay1Bot).toBeDefined();
+    expect(Math.round(bay1Bot!.end.x)).toBe(243);
+
+    // 2. Bay 2 (Grid 2 to 3): formwork on both sides must span flush between Column 2 face (273) and Column 3 face (394)
+    const bay2Top = diag.beams.find((b) => b.name === 'B1-บน' && Math.round(b.start.x) === 273);
+    expect(bay2Top).toBeDefined();
+    expect(Math.round(bay2Top!.end.x)).toBe(394);
+
+    // 3. Verify no formwork penetrates inside Column 2 concrete [244, 272] along Grid A (y ≈ 292 or y ≈ 322)
+    const penetratesCol2 = diag.beams.some((b) => {
+      const isH = Math.abs(b.end.x - b.start.x) >= Math.abs(b.end.y - b.start.y);
+      if (!isH) return false;
+      const y = (b.start.y + b.end.y) / 2;
+      if (Math.abs(y - 292) > 5 && Math.abs(y - 322) > 5) return false;
+      const minX = Math.min(b.start.x, b.end.x);
+      const maxX = Math.max(b.start.x, b.end.x);
+      return minX < 250 && maxX > 265;
+    });
+    expect(penetratesCol2).toBe(false);
+  });
+
+  it('guarantees that auto-detected formwork stops flush at column faces and perpendicular beams without penetrating concrete', () => {
+    // Primary beam on horizontal axis y = 200, spanning between columns at (100, 200) and (400, 200)
+    // Secondary beam on vertical axis x = 250, meeting primary beam from below (y in [200, 350])
+    const rawBeams: BeamElement[] = [
+      createBeamElement('B1', { x: 100, y: 200 }, { x: 400, y: 200 }, 50, 20),
+      createBeamElement('B2', { x: 250, y: 200 }, { x: 250, y: 350 }, 50, 20),
+    ];
+    const intersections: GridIntersection[] = [
+      { id: '1', x: 100, y: 200, hCoord: 200, vCoord: 100, label: 'A-1' },
+      { id: '2', x: 400, y: 200, hCoord: 200, vCoord: 400, label: 'A-2' },
+    ];
+    const safeScale = 1.0;
+    // Column half-width at 1.0 scale with 20cm width is 10px: Column 1 is [90, 110], Column 2 is [390, 410]
+    // Beam width 20cm, half-width 10px: B1 top is at y = 190, bot is at y = 210
+    // Secondary beam B2 is at x = 250, width 20cm (x in [240, 260]), meeting B1 at y = 200 and extending to y = 350
+    const sides = convertDetectedBeamsToFormworkSides(rawBeams, safeScale, intersections);
+
+    // 1. B1 formwork must start at Column 1 right face (110) and end at Column 2 left face (390)
+    const b1Top = sides.find((s) => s.name.startsWith('B1-บน'));
+    expect(b1Top).toBeDefined();
+    expect(b1Top!.start.x).toBe(110);
+    expect(b1Top!.end.x).toBe(390);
+
+    // 2. B1 bottom formwork must have a cutout for secondary beam B2 [240, 260]
+    const b1BotSegs = sides.filter((s) => s.name.startsWith('B1-ล่าง'));
+    expect(b1BotSegs.length).toBe(2);
+    expect(b1BotSegs[0].start.x).toBe(110);
+    expect(b1BotSegs[0].end.x).toBe(240);
+    expect(b1BotSegs[1].start.x).toBe(260);
+    expect(b1BotSegs[1].end.x).toBe(390);
+
+    // 3. Secondary beam B2 formwork must start at the bottom face of B1 (210) and NOT penetrate into B1 (y < 210)
+    const b2Left = sides.find((s) => s.name.startsWith('B2-ซ้าย'));
+    expect(b2Left).toBeDefined();
+    expect(b2Left!.start.y).toBe(210);
+
+    const b2Right = sides.find((s) => s.name.startsWith('B2-ขวา'));
+    expect(b2Right).toBeDefined();
+    expect(b2Right!.start.y).toBe(210);
   });
 });
