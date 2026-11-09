@@ -663,17 +663,23 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       ctx.fill();
     }
 
-    // 5b. Draw Active Magnetic Column Corner Snap Box (□ Snap มุมเสา)
+    // 5b. Draw Active Magnetic Column Corner / Grid / Dim Snap Box
     if (
       activeSnap &&
       (isDrawingTool ||
+        scaleMode !== 'none' ||
         dragState?.mode === 'move_start' ||
         dragState?.mode === 'move_end')
     ) {
       const boxHalf = 6.5 / zoom;
       const isGridSnap = activeSnap.kind === 'grid_intersection';
-      ctx.strokeStyle = isGridSnap ? '#2563EB' : '#10B981';
-      ctx.fillStyle = isGridSnap ? 'rgba(37, 99, 235, 0.22)' : 'rgba(16, 185, 129, 0.18)';
+      const isDimSnap = activeSnap.kind === 'line_corner';
+      ctx.strokeStyle = isGridSnap ? '#2563EB' : isDimSnap ? '#D97706' : '#10B981';
+      ctx.fillStyle = isGridSnap
+        ? 'rgba(37, 99, 235, 0.22)'
+        : isDimSnap
+        ? 'rgba(217, 119, 6, 0.22)'
+        : 'rgba(16, 185, 129, 0.18)';
       ctx.lineWidth = 2.2 / zoom;
       ctx.fillRect(
         activeSnap.x - boxHalf,
@@ -689,7 +695,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       );
 
       // Snap label badge
-      ctx.fillStyle = isGridSnap ? '#1D4ED8' : '#047857';
+      ctx.fillStyle = isGridSnap ? '#1D4ED8' : isDimSnap ? '#B45309' : '#047857';
       ctx.font = `700 ${Math.max(9, 10 / zoom)}px "Plus Jakarta Sans", sans-serif`;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'bottom';
@@ -804,8 +810,14 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
 
     const rawWorld = screenToWorld(e.clientX, e.clientY);
     const snapTolPx = 16 / zoom;
+    const shouldSnap =
+      scaleMode !== 'none' ||
+      activeTool !== 'select' ||
+      dragState?.mode === 'move_start' ||
+      dragState?.mode === 'move_end' ||
+      dragState?.mode === 'resize_box_corner';
     const snapped =
-      activeTool !== 'select' && snapPoints.length > 0
+      shouldSnap && snapPoints.length > 0
         ? findNearestSnapPoint(rawWorld, snapPoints, snapTolPx)
         : null;
     const world: Point = snapped ? { x: snapped.x, y: snapped.y } : rawWorld;
@@ -1053,6 +1065,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     const rawWorld = screenToWorld(e.clientX, e.clientY);
     const snapTolPx = 16 / zoom;
     const shouldSnap =
+      scaleMode !== 'none' ||
       activeTool !== 'select' ||
       dragState?.mode === 'move_start' ||
       dragState?.mode === 'move_end' ||
@@ -1266,6 +1279,8 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
             ? 'cursor-grabbing'
             : isSpacePressed || activeTool === 'pan'
             ? 'cursor-grab'
+            : scaleMode !== 'none'
+            ? 'cursor-crosshair'
             : marqueeBox
             ? 'cursor-crosshair'
             : dragState

@@ -2782,6 +2782,22 @@ export function extractColumnSnapPoints(
         }
       }
     }
+
+    // 2b. Dimension line endpoints & ticks (จุดบอกระยะบนแปลน)
+    const dimLines = classified.filter((c) => c.category === 'grid_or_dimension');
+    for (const dl of dimLines) {
+      if (dl.orientation === 'horizontal') {
+        rawPoints.push(
+          { x: dl.start, y: dl.coord, kind: 'line_corner', label: 'จุดบอกระยะ' },
+          { x: dl.end, y: dl.coord, kind: 'line_corner', label: 'จุดบอกระยะ' }
+        );
+      } else if (dl.orientation === 'vertical') {
+        rawPoints.push(
+          { x: dl.coord, y: dl.start, kind: 'line_corner', label: 'จุดบอกระยะ' },
+          { x: dl.coord, y: dl.end, kind: 'line_corner', label: 'จุดบอกระยะ' }
+        );
+      }
+    }
   }
 
   // 3. Corners and endpoints of existing beams on canvas

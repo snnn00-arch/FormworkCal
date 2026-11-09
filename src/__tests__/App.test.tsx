@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import App from '../App';
@@ -141,5 +141,40 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
 
     // Should display multi-selection floating bar with 'เลือก 2 เส้นพร้อมกัน'
     expect(screen.getByText(/เลือก 2 เส้นพร้อมกัน/i)).toBeInTheDocument();
+  });
+
+  it('supports magnetic snapping during manual scale calibration', () => {
+    const { container } = render(<App />);
+    const canvas = container.querySelector('canvas')!;
+
+    // Draw a beam to establish known snap points (100, 100) -> (300, 100)
+    fireEvent.keyDown(window, { key: '1' });
+    fireEvent.mouseDown(canvas, { clientX: 100, clientY: 100 });
+    fireEvent.mouseDown(canvas, { clientX: 300, clientY: 100 });
+
+    // Click Manual Scale button
+    const manualScaleBtn = screen.getByRole('button', { name: /Manual Scale/i });
+    fireEvent.click(manualScaleBtn);
+
+    // Prompt mock
+    vi.spyOn(window, 'prompt').mockReturnValue('2.00');
+
+    // Hover near beam endpoint (98, 102) -> should magnetically snap to (100, 100)
+    fireEvent.mouseMove(canvas, { clientX: 98, clientY: 102 });
+
+    // Click point 1 (near 100, 100)
+    fireEvent.mouseDown(canvas, { clientX: 98, clientY: 102 });
+
+    // Banner indicates waiting for second point
+    expect(screen.getByText(/คลิกจุดที่ 2 บนแปลนเพื่อสิ้นสุดการวัดระยะสเกล/i)).toBeInTheDocument();
+
+    // Hover near endpoint 2 (297, 101) -> should magnetically snap to (300, 100)
+    fireEvent.mouseMove(canvas, { clientX: 297, clientY: 101 });
+
+    // Click point 2
+    fireEvent.mouseDown(canvas, { clientX: 297, clientY: 101 });
+
+    // Scale should be recalculated and updated
+    expect(screen.getByText(/px\/ซม\./i)).toBeInTheDocument();
   });
 });
