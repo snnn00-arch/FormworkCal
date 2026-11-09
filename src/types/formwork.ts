@@ -165,7 +165,15 @@ export type DrawingToolMode =
   | 'draw_inner_line'
   | 'draw_outer_line'
   | 'draw_inner_box'
-  | 'draw_outer_box';
+  | 'draw_outer_box'
+  | 'print_boundary';
+
+export interface PrintBoundary {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 export interface PlacedPanel {
   id: string;
@@ -249,5 +257,6 @@ export interface FormworkProjectData {
   pdfDimensions?: { width: number; height: number };
   pdfImageUrl?: string | null;
   vectorCircles?: { cx: number; cy: number; radius: number }[];
+  printBoundary?: PrintBoundary | null;
 }
 

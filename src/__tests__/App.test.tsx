@@ -22,14 +22,12 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
     expect(screen.getByTitle(/ทำซ้ำ \(Redo: Ctrl \+ Y หรือ Ctrl \+ Shift \+ Z\)/i)).toBeInTheDocument();
     expect(screen.getByText(/บันทึกโปรเจกต์/i)).toBeInTheDocument();
     expect(screen.getByText(/เปิดโปรเจกต์/i)).toBeInTheDocument();
+    expect(screen.getByText(/ขอบเขตพิมพ์ A3/i)).toBeInTheDocument();
     expect(screen.getByText(/รายงาน PDF/i)).toBeInTheDocument();
   });
 
   it('allows switching tool to draw inner/outer perimeter lines, multi-select with shift, and undo/redo', () => {
     const { container } = render(<App />);
-
-    // Verify 20cm default beam width input exists
-    expect(screen.getByDisplayValue('20')).toBeInTheDocument();
 
     // Verify default height is 50 cm
     expect(screen.getByDisplayValue('50 ซม.')).toBeInTheDocument();
@@ -40,7 +38,7 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
 
     const canvas = container.querySelector('canvas')!;
 
-    // Click start point (100, 100) and end point (400, 100) -> creates inner + outer parallel lines (20cm offset)
+    // Click start point (100, 100) and end point (400, 100) -> creates single inner perimeter line
     fireEvent.mouseDown(canvas, { clientX: 100, clientY: 100 });
     fireEvent.mouseDown(canvas, { clientX: 400, clientY: 100 });
 
@@ -131,6 +129,13 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
     fireEvent.mouseDown(canvas, { clientX: 100, clientY: 100 });
     fireEvent.mouseDown(canvas, { clientX: 300, clientY: 100 });
 
+    // Switch to Draw Inner Line mode again (shortcut 1) to draw second beam
+    fireEvent.keyDown(window, { key: '1' });
+
+    // Draw second beam at (100, 150) -> (300, 150)
+    fireEvent.mouseDown(canvas, { clientX: 100, clientY: 150 });
+    fireEvent.mouseDown(canvas, { clientX: 300, clientY: 150 });
+
     // Switch back to Select mode (shortcut V)
     fireEvent.keyDown(window, { key: 'v' });
 
@@ -209,5 +214,33 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
     // Scale should be updated
     expect(promptSpy).toHaveBeenCalled();
     expect(screen.getByText(/px\/ซม\./i)).toBeInTheDocument();
+  });
+
+  it('supports activating A3 print boundary tool, dragging on canvas, and clearing boundary', () => {
+    const { container } = render(<App />);
+    const canvas = container.querySelector('canvas')!;
+
+    // 1. Click Print Boundary tool
+    const printBoundaryBtn = screen.getByRole('button', { name: /ขอบเขตพิมพ์ A3/i });
+    fireEvent.click(printBoundaryBtn);
+
+    // Banner indicates user can drag to define A3 boundary
+    expect(screen.getByText(/คลิกค้างแล้วลากเพื่อกำหนดขอบเขตพิมพ์ A3/i)).toBeInTheDocument();
+
+    // 2. Drag a box on canvas: (100, 100) -> (450, 350)
+    fireEvent.mouseDown(canvas, { clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(canvas, { clientX: 450, clientY: 350 });
+    fireEvent.mouseUp(canvas, { clientX: 450, clientY: 350 });
+
+    // 3. Button shows boundary is established
+    expect(screen.getByText(/ขอบเขตพิมพ์ A3 \(ตั้งแล้ว\)/i)).toBeInTheDocument();
+
+    // 4. Clear boundary button
+    const clearBtn = screen.getByTitle(/ล้างขอบเขตพิมพ์ A3/i);
+    expect(clearBtn).toBeInTheDocument();
+    fireEvent.click(clearBtn);
+
+    // 5. Button returns to default state
+    expect(screen.getByText(/ขอบเขตพิมพ์ A3/i)).toBeInTheDocument();
   });
 });

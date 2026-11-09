@@ -5,6 +5,7 @@ import {
   loadProjectFile,
   saveProjectFile,
   exportFormworkPdfReport,
+  renderHighResPlanCanvas,
 } from '../exportEngine';
 import { FormworkProjectData } from '../../types/formwork';
 
@@ -62,5 +63,18 @@ describe('exportEngine', () => {
   it('provides exportFormworkPdfReport and saveProjectFile functions', () => {
     expect(typeof exportFormworkPdfReport).toBe('function');
     expect(typeof saveProjectFile).toBe('function');
+  });
+
+  it('renders high-res A3 plan canvas cropped to print boundary with aspect ratio 1.414', () => {
+    const res = renderHighResPlanCanvas(2520, 1782, {
+      printBoundary: { x: 100, y: 100, width: 400, height: 283 },
+      beams: [],
+      panels: [],
+      pixelsPerCm: 1.2,
+    });
+    expect(res.canvas.width).toBe(2520);
+    expect(res.canvas.height).toBe(1782);
+    expect(res.realWidthM).toBeGreaterThan(0);
+    expect(res.paperScale).toBeGreaterThan(0);
   });
 });

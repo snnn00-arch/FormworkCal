@@ -6,6 +6,7 @@ import {
   FormworkHeight,
   FormworkProjectData,
   Point,
+  PrintBoundary,
 } from './types/formwork';
 import {
   applyAutoCornerExtensions,
@@ -33,6 +34,7 @@ import {
   downloadCsvFile,
   exportCanvasAsPng,
   exportFormworkPdfReport,
+  renderHighResPlanCanvas,
   generateRentalSummaryCsv,
   loadProjectFile,
   saveProjectFile,
@@ -78,9 +80,8 @@ export const App: React.FC = () => {
 
   // Default height set to 50 cm as requested
   const [defaultHeight, setDefaultHeight] = useState<FormworkHeight>(50);
-  const [defaultBeamWidthCm, setDefaultBeamWidthCm] = useState<number>(DEFAULT_BEAM_WIDTH_CM);
-  const [autoParallelPair, setAutoParallelPair] = useState<boolean>(true);
   const [activeTool, setActiveTool] = useState<DrawingToolMode>('select');
+  const [printBoundary, setPrintBoundary] = useState<PrintBoundary | null>(null);
 
   // Multi-Selection State
   const [selectedBeamIds, setSelectedBeamIds] = useState<string[]>([]);
@@ -135,11 +136,11 @@ export const App: React.FC = () => {
       planTexts,
       beams,
       pixelsPerCm,
-      defaultBeamWidthCm,
+      DEFAULT_BEAM_WIDTH_CM,
       pdfDimensions,
       vectorCircles
     );
-  }, [vectorLines, planTexts, beams, pixelsPerCm, defaultBeamWidthCm, pdfDimensions, vectorCircles]);
+  }, [vectorLines, planTexts, beams, pixelsPerCm, pdfDimensions, vectorCircles]);
 
   // Selection Handler (with Shift-click toggle)
   const handleSelectBeam = (id: string | null, isShift = false) => {
@@ -191,36 +192,10 @@ export const App: React.FC = () => {
       setPixelsPerCm(scaleResult.pixelsPerCm);
       setScaleNote(scaleResult.confidence);
 
-      // 2. Auto line classification + Grid-First Detection (default height = 50 cm)
-      if (loaded.vectorLines.length > 0 || (loaded.vectorCircles && loaded.vectorCircles.length > 0)) {
-        const diag = autoDetectBeamsWithDiagnostics(
-          loaded.vectorLines,
-          scaleResult.pixelsPerCm,
-          50,
-          loaded.texts,
-          dims,
-          loaded.vectorCircles || []
-        );
-        setGridAxes(diag.gridAxes);
-        setGridIntersections(diag.gridIntersections);
-
-        if (diag.beams.length > 0) {
-          const withCorners = applyAutoCornerExtensions(diag.beams, scaleResult.pixelsPerCm);
-          updateBeamsWithHistory(withCorners);
-          setSelectedBeamIds(withCorners[0] ? [withCorners[0].id] : []);
-          setIsPdfModalOpen(false);
-          setPdfInspection(null);
-          alert(
-            `นำเข้า PDF หน้า ${pageNumber} สำเร็จ (ความคมชัดระดับ Ultra-HD Vector)!\n- สเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- ค้นพบแกนกริดหลัก: แนวนอน ${diag.counts.horizontalGrids} แกน, แนวตั้ง ${diag.counts.verticalGrids} แกน\n- กำหนดจุดตัดกริด (Grid Intersections): ${diag.counts.gridIntersections} จุดตัด (A-1, B-2...)\n- วางคานหลักตามแนวกริดและตัดคานซอย: ${diag.beams.length} ช่วง (ความสูงเริ่มต้น 50 ซม.)`
-          );
-          return;
-        }
-      }
-
       setIsPdfModalOpen(false);
       setPdfInspection(null);
       alert(
-        `นำเข้า PDF หน้า ${pageNumber} สำเร็จ (ความคมชัดระดับ Ultra-HD Vector)!\n- ตั้งสเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม.\n- คุณสามารถกดปุ่ม "สแกนคาน (Auto 50 ซม.)" หรือเลือกเครื่องมือวาดคานวงใน / วงนอก ได้ทันทีครับ`
+        `นำเข้า PDF หน้า ${pageNumber} สำเร็จ (ความคมชัดระดับ Ultra-HD Vector)!\n- ตั้งสเกล: ${scaleResult.pixelsPerCm.toFixed(2)} px/ซม. (${scaleResult.confidence})\n- คุณสามารถกดปุ่ม "สแกนคาน (Auto 50 ซม.)" เพื่อสแกนคานอัตโนมัติ หรือเลือกเครื่องมือวาดคานวงใน / วงนอก ได้ทันทีครับ`
       );
     } catch (err) {
       console.error('Failed to load PDF page:', err);
@@ -381,8 +356,8 @@ export const App: React.FC = () => {
         'inner',
         defaultHeight,
         pixelsPerCm,
-        defaultBeamWidthCm,
-        autoParallelPair
+        DEFAULT_BEAM_WIDTH_CM,
+        false
       );
     } else if (toolMode === 'draw_outer_box') {
       createdEdges = createEdgesFromBoxTool(
@@ -392,8 +367,8 @@ export const App: React.FC = () => {
         'outer',
         defaultHeight,
         pixelsPerCm,
-        defaultBeamWidthCm,
-        autoParallelPair
+        DEFAULT_BEAM_WIDTH_CM,
+        false
       );
     } else if (toolMode === 'draw_outer_line') {
       createdEdges = createEdgesFromLineTool(
@@ -403,8 +378,8 @@ export const App: React.FC = () => {
         'outer',
         defaultHeight,
         pixelsPerCm,
-        defaultBeamWidthCm,
-        autoParallelPair
+        DEFAULT_BEAM_WIDTH_CM,
+        false
       );
     } else {
       createdEdges = createEdgesFromLineTool(
@@ -414,8 +389,8 @@ export const App: React.FC = () => {
         'inner',
         defaultHeight,
         pixelsPerCm,
-        defaultBeamWidthCm,
-        autoParallelPair
+        DEFAULT_BEAM_WIDTH_CM,
+        false
       );
     }
 
@@ -679,12 +654,13 @@ export const App: React.FC = () => {
       pixelsPerCm,
       scaleNote,
       defaultHeight,
-      defaultBeamWidthCm,
-      autoParallelPair,
+      defaultBeamWidthCm: DEFAULT_BEAM_WIDTH_CM,
+      autoParallelPair: false,
       beams,
       pdfDimensions,
       pdfImageUrl,
       vectorCircles,
+      printBoundary,
     };
     saveProjectFile(projectData);
   };
@@ -696,8 +672,7 @@ export const App: React.FC = () => {
       setPixelsPerCm(loaded.pixelsPerCm);
       setScaleNote(loaded.scaleNote);
       setDefaultHeight(loaded.defaultHeight);
-      setDefaultBeamWidthCm(loaded.defaultBeamWidthCm);
-      setAutoParallelPair(loaded.autoParallelPair);
+      setPrintBoundary(loaded.printBoundary || null);
       setPdfDimensions(loaded.pdfDimensions);
       setPdfImageUrl(loaded.pdfImageUrl || null);
       if (loaded.vectorCircles) {
@@ -713,12 +688,20 @@ export const App: React.FC = () => {
     }
   };
 
-  // Official PDF Report Export Handler
+  // Official PDF Report Export Handler (A3 Landscape)
   const handleExportPdf = async () => {
     try {
       await exportFormworkPdfReport(canvasRef.current, summary, {
         scale: pixelsPerCm,
         totalBeams: beams.length,
+        projectName: 'โครงการแบบและการคำนวณไม้แบบ',
+        printBoundary,
+        vectorLines,
+        gridAxes,
+        gridIntersections,
+        beams,
+        panels,
+        pixelsPerCm,
       });
     } catch (err) {
       console.error('Failed to export PDF:', err);
@@ -732,7 +715,21 @@ export const App: React.FC = () => {
   };
 
   const handleExportPng = () => {
-    exportCanvasAsPng(canvasRef.current, 'formwork-beam-layout.png');
+    if (printBoundary) {
+      const planRes = renderHighResPlanCanvas(2520, 1782, {
+        printBoundary,
+        vectorLines,
+        gridAxes,
+        gridIntersections,
+        beams,
+        panels,
+        pixelsPerCm,
+        fallbackCanvas: canvasRef.current,
+      });
+      exportCanvasAsPng(planRes.canvas, 'formwork-beam-layout-A3.png');
+    } else {
+      exportCanvasAsPng(canvasRef.current, 'formwork-beam-layout.png');
+    }
   };
 
   return (
@@ -758,12 +755,10 @@ export const App: React.FC = () => {
         scaleNote={scaleNote}
         defaultHeight={defaultHeight}
         onChangeDefaultHeight={setDefaultHeight}
-        defaultBeamWidthCm={defaultBeamWidthCm}
-        onChangeDefaultBeamWidthCm={setDefaultBeamWidthCm}
-        autoParallelPair={autoParallelPair}
-        onChangeAutoParallelPair={setAutoParallelPair}
         activeTool={activeTool}
         onChangeActiveTool={setActiveTool}
+        printBoundary={printBoundary}
+        onClearPrintBoundary={() => setPrintBoundary(null)}
         onAutoPlaceFormwork={handleAutoPlaceFormwork}
         onExportCsv={handleExportCsv}
         onExportPng={handleExportPng}
@@ -802,6 +797,8 @@ export const App: React.FC = () => {
           onAddBeam={handleAddBeam}
           scaleMode={scaleMode}
           onCalibrationPointsSelected={handleCalibrationPointsSelected}
+          printBoundary={printBoundary}
+          onSetPrintBoundary={setPrintBoundary}
         />
 
         <RightSidebar

@@ -4,6 +4,7 @@ import {
   DrawingToolMode,
   PlacedPanel,
   Point,
+  PrintBoundary,
 } from '../types/formwork';
 import { SnapPoint, GridAxis, GridIntersection } from '../engine/beamDetector';
 import { RawVectorLine } from '../engine/scaleCalibrator';
@@ -39,6 +40,8 @@ interface PlanCanvasProps {
   onAddBeam: (start: Point, end: Point, toolMode?: DrawingToolMode | 'draw_beam') => void;
   scaleMode: 'none' | 'manual_p1' | 'manual_p2';
   onCalibrationPointsSelected: (p1: Point, p2: Point) => void;
+  printBoundary?: PrintBoundary | null;
+  onSetPrintBoundary?: (boundary: PrintBoundary | null) => void;
 }
 
 interface DragBeamState {
@@ -236,6 +239,8 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   onAddBeam,
   scaleMode,
   onCalibrationPointsSelected,
+  printBoundary,
+  onSetPrintBoundary,
 }) => {
   const effectiveSelectedIds = selectedBeamIds || (selectedBeamId ? [selectedBeamId] : []);
   const primarySelectedId = effectiveSelectedIds[effectiveSelectedIds.length - 1] || null;
@@ -261,6 +266,10 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     current: Point;
     isShift: boolean;
   } | null>(null);
+
+  // Print boundary crop drag state
+  const [boundaryDragStart, setBoundaryDragStart] = useState<Point | null>(null);
+  const [boundaryDragCurrent, setBoundaryDragCurrent] = useState<Point | null>(null);
 
   // Spacebar pan navigation state
   const [isSpacePressed, setIsSpacePressed] = useState<boolean>(false);
@@ -805,6 +814,107 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       ctx.restore();
     }
 
+    // 8. Draw A3 Print Boundary (Active Drag or Established Boundary)
+    const activeBoundary = (() => {
+      if (boundaryDragStart && boundaryDragCurrent) {
+        const A3_RATIO = 2520 / 1782; // 1.41414...
+        const rawDx = boundaryDragCurrent.x - boundaryDragStart.x;
+        const rawDy = boundaryDragCurrent.y - boundaryDragStart.y;
+        const signX = rawDx >= 0 ? 1 : -1;
+        const signY = rawDy >= 0 ? 1 : -1;
+        let bw = Math.abs(rawDx);
+        let bh = Math.abs(rawDy);
+        if (bw >= bh * A3_RATIO) {
+          bh = bw / A3_RATIO;
+        } else {
+          bw = bh * A3_RATIO;
+        }
+        const bx = signX > 0 ? boundaryDragStart.x : boundaryDragStart.x - bw;
+        const by = signY > 0 ? boundaryDragStart.y : boundaryDragStart.y - bh;
+        return { x: bx, y: by, width: bw, height: bh, isDragging: true };
+      }
+      if (printBoundary && printBoundary.width > 20 && printBoundary.height > 20) {
+        return { ...printBoundary, isDragging: false };
+      }
+      return null;
+    })();
+
+    if (activeBoundary) {
+      const { x: bx, y: by, width: bw, height: bh, isDragging } = activeBoundary;
+      ctx.save();
+
+      // Dimmed outer mask outside print boundary
+      const canvasViewStartX = -pan.x / zoom;
+      const canvasViewStartY = -pan.y / zoom;
+      const canvasViewW = canvas.clientWidth / zoom;
+      const canvasViewH = canvas.clientHeight / zoom;
+      const canvasViewEndX = canvasViewStartX + canvasViewW;
+      const canvasViewEndY = canvasViewStartY + canvasViewH;
+
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.40)';
+      // Top band
+      ctx.fillRect(canvasViewStartX, canvasViewStartY, canvasViewW, Math.max(0, by - canvasViewStartY));
+      // Bottom band
+      ctx.fillRect(canvasViewStartX, by + bh, canvasViewW, Math.max(0, canvasViewEndY - (by + bh)));
+      // Left band
+      ctx.fillRect(canvasViewStartX, by, Math.max(0, bx - canvasViewStartX), bh);
+      // Right band
+      ctx.fillRect(bx + bw, by, Math.max(0, canvasViewEndX - (bx + bw)), bh);
+
+      // Boundary Border
+      ctx.strokeStyle = isDragging ? '#F59E0B' : '#2563EB';
+      ctx.lineWidth = 2.5 / zoom;
+      ctx.setLineDash([8 / zoom, 5 / zoom]);
+      ctx.strokeRect(bx, by, bw, bh);
+      ctx.setLineDash([]);
+
+      // 4 Corner brackets (CAD crop style)
+      const bracketLen = Math.min(24 / zoom, Math.min(bw, bh) * 0.2);
+      ctx.strokeStyle = isDragging ? '#D97706' : '#1D4ED8';
+      ctx.lineWidth = 3.5 / zoom;
+      ctx.beginPath();
+      // NW
+      ctx.moveTo(bx, by + bracketLen); ctx.lineTo(bx, by); ctx.lineTo(bx + bracketLen, by);
+      // NE
+      ctx.moveTo(bx + bw - bracketLen, by); ctx.lineTo(bx + bw, by); ctx.lineTo(bx + bw, by + bracketLen);
+      // SE
+      ctx.moveTo(bx + bw, by + bh - bracketLen); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw - bracketLen, by + bh);
+      // SW
+      ctx.moveTo(bx + bracketLen, by + bh); ctx.lineTo(bx, by + bh); ctx.lineTo(bx, by + bh - bracketLen);
+      ctx.stroke();
+
+      // Floating Badge on Top of Boundary Box
+      const safePpc = pixelsPerCm > 0 ? pixelsPerCm : 1.2;
+      const wM = (bw / safePpc) / 100;
+      const hM = (bh / safePpc) / 100;
+      const paperScale = Math.max(1, Math.round(wM / 0.252));
+      const badgeText = `⛶ ขอบเขตพิมพ์ A3: ${wM.toFixed(2)} ม. × ${hM.toFixed(2)} ม. (สเกลกระดาษ A3 ~ 1:${paperScale})`;
+
+      const badgeFontSize = Math.max(11, 13 / zoom);
+      ctx.font = `bold ${badgeFontSize}px "Plus Jakarta Sans", sans-serif`;
+      const textMetrics = ctx.measureText(badgeText);
+      const badgePadX = 12 / zoom;
+      const badgePadY = 6 / zoom;
+      const badgeW = textMetrics.width + badgePadX * 2;
+      const badgeH = badgeFontSize + badgePadY * 2;
+      const badgeX = bx + (bw - badgeW) / 2;
+      const badgeY = by - badgeH - 6 / zoom;
+
+      // Badge pill background
+      ctx.fillStyle = isDragging ? '#D97706' : '#1E40AF';
+      ctx.beginPath();
+      ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 6 / zoom);
+      ctx.fill();
+
+      // Badge text
+      ctx.fillStyle = '#FFFFFF';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(badgeText, badgeX + badgeW / 2, badgeY + badgeH / 2);
+
+      ctx.restore();
+    }
+
     ctx.restore();
   }, [
     beams,
@@ -813,6 +923,9 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     activeSnap,
     dragState,
     marqueeBox,
+    boundaryDragStart,
+    boundaryDragCurrent,
+    printBoundary,
     pdfImage,
     vectorLines,
     gridAxes,
@@ -861,6 +974,13 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     }
 
     const rawWorld = screenToWorld(e.clientX, e.clientY);
+
+    // 0. Print Boundary Crop Mode: start dragging boundary box
+    if (activeTool === 'print_boundary') {
+      setBoundaryDragStart(rawWorld);
+      setBoundaryDragCurrent(rawWorld);
+      return;
+    }
     const snapTolPx = 16 / zoom;
     const shouldSnap =
       scaleMode !== 'none' ||
@@ -1135,6 +1255,12 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     }
     setCurrentMousePos(world);
 
+    // If currently dragging print boundary
+    if (activeTool === 'print_boundary' && boundaryDragStart) {
+      setBoundaryDragCurrent(rawWorld);
+      return;
+    }
+
     // If currently dragging marquee selection box ("คลุมดำ")
     if (marqueeBox) {
       setMarqueeBox((prev) => (prev ? { ...prev, current: rawWorld } : null));
@@ -1199,6 +1325,39 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   };
 
   const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    // 0. Finalize Print Boundary
+    if (activeTool === 'print_boundary' && boundaryDragStart && boundaryDragCurrent) {
+      const A3_RATIO = 2520 / 1782; // 1.41414...
+      const rawDx = boundaryDragCurrent.x - boundaryDragStart.x;
+      const rawDy = boundaryDragCurrent.y - boundaryDragStart.y;
+      const signX = rawDx >= 0 ? 1 : -1;
+      const signY = rawDy >= 0 ? 1 : -1;
+
+      let bw = Math.abs(rawDx);
+      let bh = Math.abs(rawDy);
+      if (bw >= bh * A3_RATIO) {
+        bh = bw / A3_RATIO;
+      } else {
+        bw = bh * A3_RATIO;
+      }
+
+      if (bw > 30 && bh > 20) {
+        const minX = signX > 0 ? boundaryDragStart.x : boundaryDragStart.x - bw;
+        const minY = signY > 0 ? boundaryDragStart.y : boundaryDragStart.y - bh;
+        onSetPrintBoundary?.({
+          x: minX,
+          y: minY,
+          width: bw,
+          height: bh,
+        });
+        onChangeActiveTool?.('select');
+      }
+      setBoundaryDragStart(null);
+      setBoundaryDragCurrent(null);
+      setIsPanning(false);
+      return;
+    }
+
     // 1. Finalize Marquee Selection ("คลุมดำ")
     if (marqueeBox) {
       const rawWorld = screenToWorld(e.clientX, e.clientY);
@@ -1464,6 +1623,12 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
               ? 'คลิกจุดที่ 2 บนแปลน (กด Shift ค้างเพื่อบังคับแนวแกนตรง X/Y)'
               : 'คลิกจุดที่ 1 บนแปลนเพื่อเริ่มเซตสเกล'}
           </span>
+        </div>
+      )}
+
+      {activeTool === 'print_boundary' && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-amber-600 text-white px-4 py-1.5 rounded-full text-xs font-semibold shadow-md flex items-center gap-2">
+          <span>คลิกค้างแล้วลากเพื่อกำหนดขอบเขตพิมพ์ A3 (ล็อกสัดส่วนตามช่องแปลนกระดาษ A3 อัตโนมัติ)</span>
         </div>
       )}
 

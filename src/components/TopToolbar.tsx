@@ -11,7 +11,6 @@ import {
   ShieldCheck,
   Scan,
   Square,
-  Copy,
   Undo2,
   Redo2,
   Save,
@@ -20,8 +19,9 @@ import {
   Eraser,
   Grid,
   Hand,
+  Crop,
 } from 'lucide-react';
-import { DrawingToolMode, FORMWORK_HEIGHTS, FormworkHeight } from '../types/formwork';
+import { DrawingToolMode, FORMWORK_HEIGHTS, FormworkHeight, PrintBoundary } from '../types/formwork';
 
 interface TopToolbarProps {
   onUploadPdf: (file: File) => void;
@@ -38,12 +38,10 @@ interface TopToolbarProps {
   scaleNote: string;
   defaultHeight: FormworkHeight;
   onChangeDefaultHeight: (h: FormworkHeight) => void;
-  defaultBeamWidthCm?: number;
-  onChangeDefaultBeamWidthCm?: (w: number) => void;
-  autoParallelPair?: boolean;
-  onChangeAutoParallelPair?: (val: boolean) => void;
   activeTool: DrawingToolMode | 'draw_beam';
   onChangeActiveTool: (tool: DrawingToolMode) => void;
+  printBoundary?: PrintBoundary | null;
+  onClearPrintBoundary?: () => void;
   onAutoPlaceFormwork: () => void;
   onExportCsv: () => void;
   onExportPng: () => void;
@@ -71,12 +69,10 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   scaleNote,
   defaultHeight,
   onChangeDefaultHeight,
-  defaultBeamWidthCm = 20,
-  onChangeDefaultBeamWidthCm,
-  autoParallelPair = true,
-  onChangeAutoParallelPair,
   activeTool,
   onChangeActiveTool,
+  printBoundary,
+  onClearPrintBoundary,
   onAutoPlaceFormwork,
   onExportCsv,
   onExportPng,
@@ -254,22 +250,6 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           </select>
         </div>
 
-        {/* Default Beam Width Input */}
-        <div className="flex items-center gap-1 bg-white px-2 py-0.5 rounded-md border border-slate-200 text-[11px]">
-          <span className="text-slate-500 font-medium">กว้างคาน:</span>
-          <input
-            type="number"
-            min={10}
-            max={100}
-            step={5}
-            value={defaultBeamWidthCm}
-            onChange={(e) => onChangeDefaultBeamWidthCm?.(Math.max(10, Number(e.target.value) || 20))}
-            className="w-10 font-bold text-slate-800 text-center bg-slate-50 rounded border border-slate-200 text-xs py-0.5"
-            title="ความกว้างคานเริ่มต้น (ค่ามาตรฐาน 20 ซม.)"
-          />
-          <span className="text-slate-400 text-[10px]">ซม.</span>
-        </div>
-
         {/* Drawing & Selection Tools */}
         <div className="flex items-center bg-slate-100 p-0.5 rounded-md border border-slate-200 text-xs">
           <button
@@ -354,21 +334,6 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           </button>
         </div>
 
-        {/* Toggle Auto Parallel Pair (+20cm opposite edge) */}
-        <label
-          className="inline-flex items-center gap-1 px-1.5 py-1 rounded-md bg-slate-50 border border-slate-200 text-[11px] font-semibold text-slate-700 cursor-pointer hover:bg-slate-100 select-none"
-          title="เมื่อเปิด: เวลาวาดวงในหรือวงนอก ระบบจะสร้างเส้นคู่ขนานอีกฝั่งห่าง 20 ซม. พร้อมเกาะไม้แบบทั้ง 2 ฝั่งให้ทันที"
-        >
-          <input
-            type="checkbox"
-            checked={autoParallelPair}
-            onChange={(e) => onChangeAutoParallelPair?.(e.target.checked)}
-            className="rounded text-blue-600"
-          />
-          <Copy className="w-3 h-3 text-blue-600" />
-          <span>คู่ขนาน {defaultBeamWidthCm} ซม.</span>
-        </label>
-
         {/* Auto Detect Beams Action */}
         <button
           onClick={onAutoDetectBeams}
@@ -426,20 +391,54 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         </button>
       </div>
 
-      {/* Right: Export Actions */}
-      <div className="flex items-center gap-1.5">
+      {/* Top Right: Report & Print Boundary Actions */}
+      <div className="flex items-center gap-1.5 ml-auto">
+        {/* A3 Print Boundary Crop Tool */}
+        <div className="flex items-center gap-0.5 bg-slate-100 p-0.5 rounded-md border border-slate-200">
+          <button
+            onClick={() => onChangeActiveTool(activeTool === 'print_boundary' ? 'select' : 'print_boundary')}
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold transition-all cursor-pointer ${
+              activeTool === 'print_boundary'
+                ? 'bg-amber-500 text-white shadow-xs font-bold animate-pulse'
+                : printBoundary
+                ? 'bg-blue-600 text-white shadow-2xs font-semibold'
+                : 'text-slate-700 hover:bg-white'
+            }`}
+            title="กำหนดขอบเขตพิมพ์ A3: คลิกแล้วลากคลุมพื้นที่แปลนที่ต้องการให้พิมพ์ลงในรายงาน โดยระบบจะล็อกสัดส่วนตามช่องแปลนกระดาษ A3 พร้อมคำนวณสเกลให้อัตโนมัติ"
+          >
+            <Crop className="w-3.5 h-3.5" />
+            <span>
+              {activeTool === 'print_boundary'
+                ? 'ลากคลุมพื้นที่ A3...'
+                : printBoundary
+                ? 'ขอบเขตพิมพ์ A3 (ตั้งแล้ว)'
+                : 'ขอบเขตพิมพ์ A3'}
+            </span>
+          </button>
+          {printBoundary && onClearPrintBoundary && (
+            <button
+              onClick={onClearPrintBoundary}
+              className="px-1.5 py-0.5 text-slate-500 hover:text-rose-600 hover:bg-white rounded text-xs font-bold transition-colors cursor-pointer"
+              title="ล้างขอบเขตพิมพ์ A3 (กลับไปจัดเต็มแปลนอัตโนมัติ)"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+
+        {/* 3 Main Report Buttons */}
         <button
           onClick={onExportPdf}
-          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 hover:bg-rose-100 transition-colors shadow-2xs"
-          title="ส่งออกรายงานทางการเป็น PDF พร้อมแปลน, โค้ดสี, ตาราง 12 SKUs, และระยะไม้ตัดเสริมรวม"
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 hover:bg-rose-100 transition-colors shadow-2xs cursor-pointer"
+          title="ส่งออกรายงานทางการเป็น PDF ขนาด A3 แนวนอน พร้อมแปลนความละเอียดสูงระดับคมชัดพิเศษ (Ultra-HD), โค้ดสี, ตาราง 12 SKUs, และระยะไม้ตัดเสริมรวม"
         >
           <FileText className="w-3.5 h-3.5 text-rose-600" />
-          <span>รายงาน PDF</span>
+          <span>รายงาน PDF (A3)</span>
         </button>
 
         <button
           onClick={onExportPng}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-slate-700 bg-white border border-[#E2E8F0] hover:bg-slate-50 transition-colors shadow-2xs"
+          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-slate-700 bg-white border border-[#E2E8F0] hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer"
           title="ส่งออกรูปภาพแปลนการวางไม้แบบ (PNG)"
         >
           <ImageIcon className="w-3.5 h-3.5 text-slate-500" />
@@ -448,7 +447,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
 
         <button
           onClick={onExportCsv}
-          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 transition-colors shadow-2xs"
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 transition-colors shadow-2xs cursor-pointer"
           title="ดาวน์โหลดตารางสรุปจำนวนไม้แบบ 12 SKUs และไม้ตัดเสริมเป็นไฟล์ Excel CSV"
         >
           <Download className="w-3.5 h-3.5 text-emerald-600" />
