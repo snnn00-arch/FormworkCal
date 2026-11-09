@@ -278,10 +278,10 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                 ? 'bg-white text-slate-900 shadow-2xs font-semibold'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
-            title="เครื่องมือเลือก (Select): คลิกเลือก หรือกด Shift ค้างเพื่อเลือกหลายเส้น"
+            title="เครื่องมือเลือก / คลุมดำ (คีย์ลัด: V หรือ Esc): คลิกเลือก, ลากคลุมดำ (Marquee Box), หรือกด Shift ค้างเพื่อเลือกหลายเส้น"
           >
             <MousePointer className="w-3 h-3" />
-            <span>เลือก (Shift เลือกหลายเส้น)</span>
+            <span>เลือก / คลุมดำ (V)</span>
           </button>
 
           {/* Method 1: Inner Perimeter (Line & Box) */}
@@ -292,10 +292,10 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                 ? 'bg-indigo-600 text-white shadow-2xs font-semibold'
                 : 'text-slate-700 hover:bg-white/70'
             }`}
-            title="วิธีที่ 1 (ลากเส้น): คลิกวาดคาน/เกาะไม้แบบโดยวัดจากเส้นขอบวงรอบใน"
+            title="วิธีที่ 1 (ลากเส้นวงใน) (คีย์ลัด: 1 หรือ Q): คลิกวาดคาน/เกาะไม้แบบโดยวัดจากเส้นขอบวงรอบใน"
           >
             <PenTool className="w-3 h-3" />
-            <span>วาดคาน (วงใน)</span>
+            <span>วาดคาน (วงใน) (1)</span>
           </button>
 
           <button
@@ -305,10 +305,10 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                 ? 'bg-indigo-600 text-white shadow-2xs font-semibold'
                 : 'text-slate-700 hover:bg-white/70'
             }`}
-            title="วิธีที่ 1 (ตีกรอบสี่เหลี่ยม): คลิก 2 มุมของช่องพื้นด้านใน เพื่อเกาะไม้แบบครบ 4 ด้านรอบวงในทันที (ปรับขอบ 4 มุมได้)"
+            title="วิธีที่ 1 (ตีกรอบวงใน) (คีย์ลัด: 2 หรือ W): คลิก 2 มุมของช่องพื้นด้านใน เพื่อเกาะไม้แบบครบ 4 ด้านรอบวงในทันที (ปรับขอบ 4 มุมได้)"
           >
             <Square className="w-3 h-3" />
-            <span>ตีกรอบวงใน</span>
+            <span>ตีกรอบวงใน (2)</span>
           </button>
 
           {/* Method 2: Outer Perimeter (Line & Box) */}
@@ -319,10 +319,10 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                 ? 'bg-sky-600 text-white shadow-2xs font-semibold'
                 : 'text-slate-700 hover:bg-white/70'
             }`}
-            title="วิธีที่ 2 (ลากเส้น): คลิกวาดคาน/เกาะไม้แบบโดยวัดจากเส้นขอบวงรอบนอก"
+            title="วิธีที่ 2 (ลากเส้นวงนอก) (คีย์ลัด: 3 หรือ E): คลิกวาดคาน/เกาะไม้แบบโดยวัดจากเส้นขอบวงรอบนอก"
           >
             <PenTool className="w-3 h-3" />
-            <span>วาดคาน (วงนอก)</span>
+            <span>วาดคาน (วงนอก) (3)</span>
           </button>
 
           <button
@@ -332,10 +332,10 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                 ? 'bg-sky-600 text-white shadow-2xs font-semibold'
                 : 'text-slate-700 hover:bg-white/70'
             }`}
-            title="วิธีที่ 2 (ตีกรอบสี่เหลี่ยม): คลิก 2 มุมของขอบนอกคาน เพื่อเกาะไม้แบบครบ 4 ด้านจากวงนอกทันที"
+            title="วิธีที่ 2 (ตีกรอบวงนอก) (คีย์ลัด: 4 หรือ R): คลิก 2 มุมของขอบนอกคาน เพื่อเกาะไม้แบบครบ 4 ด้านจากวงนอกทันที"
           >
             <Square className="w-3 h-3" />
-            <span>ตีกรอบวงนอก</span>
+            <span>ตีกรอบวงนอก (4)</span>
           </button>
         </div>
 

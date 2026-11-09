@@ -71,4 +71,51 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
     fireEvent.keyDown(window, { key: 'Delete' });
     expect(screen.queryByText(/แก้ไขคานและแผ่นไม้แบบ: B1 \(ขอบใน\)/i)).not.toBeInTheDocument();
   });
+
+  it('supports keyboard shortcuts (1, 2, 3, 4, V) to switch drawing and selection tools', () => {
+    render(<App />);
+
+    // 1 -> draw_inner_line
+    fireEvent.keyDown(window, { key: '1' });
+    expect(screen.getByRole('button', { name: /วาดคาน \(วงใน\) \(1\)/i })).toHaveClass('bg-indigo-600');
+
+    // 2 -> draw_inner_box
+    fireEvent.keyDown(window, { key: '2' });
+    expect(screen.getByRole('button', { name: /ตีกรอบวงใน \(2\)/i })).toHaveClass('bg-indigo-600');
+
+    // 3 -> draw_outer_line
+    fireEvent.keyDown(window, { key: '3' });
+    expect(screen.getByRole('button', { name: /วาดคาน \(วงนอก\) \(3\)/i })).toHaveClass('bg-sky-600');
+
+    // 4 -> draw_outer_box
+    fireEvent.keyDown(window, { key: '4' });
+    expect(screen.getByRole('button', { name: /ตีกรอบวงนอก \(4\)/i })).toHaveClass('bg-sky-600');
+
+    // V -> select
+    fireEvent.keyDown(window, { key: 'v' });
+    expect(screen.getByRole('button', { name: /เลือก \/ คลุมดำ \(V\)/i })).toHaveClass('bg-white');
+  });
+
+  it('supports marquee selection ("คลุมดำ") to box-select beams on canvas', () => {
+    const { container } = render(<App />);
+    const canvas = container.querySelector('canvas')!;
+
+    // Switch to Draw Inner Line mode (shortcut 1)
+    fireEvent.keyDown(window, { key: '1' });
+
+    // Draw first beam at (100, 100) -> (300, 100)
+    fireEvent.mouseDown(canvas, { clientX: 100, clientY: 100 });
+    fireEvent.mouseDown(canvas, { clientX: 300, clientY: 100 });
+
+    // Switch back to Select mode (shortcut V)
+    fireEvent.keyDown(window, { key: 'v' });
+
+    // Drag marquee box ("คลุมดำ") over empty area enclosing the beams (50, 50) -> (350, 200)
+    fireEvent.mouseDown(canvas, { clientX: 50, clientY: 50, button: 0 });
+    fireEvent.mouseMove(canvas, { clientX: 350, clientY: 200 });
+    fireEvent.mouseUp(canvas, { clientX: 350, clientY: 200 });
+
+    // Should display multi-selection floating bar with 'เลือก 2 เส้นพร้อมกัน'
+    expect(screen.getByText(/เลือก 2 เส้นพร้อมกัน/i)).toBeInTheDocument();
+  });
 });

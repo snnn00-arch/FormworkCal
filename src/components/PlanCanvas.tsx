@@ -23,6 +23,7 @@ interface PlanCanvasProps {
   selectedBeamId?: string | null;
   selectedBeamIds?: string[];
   onSelectBeam: (beamId: string | null, isShift?: boolean) => void;
+  onBatchSelectBeams?: (beamIds: string[], isShift?: boolean) => void;
   onMoveBeam?: (beamId: string, newStart: Point, newEnd: Point, finalize?: boolean) => void;
   onBatchMoveBeams?: (
     origEdges: Array<{ id: string; start: Point; end: Point }>,
@@ -104,6 +105,99 @@ function findNearestSnapPoint(
   return best;
 }
 
+// 2D Line Segment vs AABB Intersection (Liang-Barsky algorithm)
+function isSegmentIntersectingBox(
+  p1: Point,
+  p2: Point,
+  minX: number,
+  maxX: number,
+  minY: number,
+  maxY: number
+): boolean {
+  if (p1.x >= minX && p1.x <= maxX && p1.y >= minY && p1.y <= maxY) return true;
+  if (p2.x >= minX && p2.x <= maxX && p2.y >= minY && p2.y <= maxY) return true;
+
+  let t0 = 0.0;
+  let t1 = 1.0;
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+
+  const p = [-dx, dx, -dy, dy];
+  const q = [p1.x - minX, maxX - p1.x, p1.y - minY, maxY - p1.y];
+
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) {
+      if (q[i] < 0) return false;
+    } else {
+      const r = q[i] / p[i];
+      if (p[i] < 0) {
+        if (r > t1) return false;
+        if (r > t0) t0 = r;
+      } else {
+        if (r < t0) return false;
+        if (r < t1) t1 = r;
+      }
+    }
+  }
+  return t0 <= t1;
+}
+
+// Check if a beam or any of its placed formwork panels intersects or lies inside the marquee box ("คลุมดำ")
+function isBeamIntersectingBox(
+  beam: BeamElement,
+  beamPanels: PlacedPanel[],
+  pixelsPerCm: number,
+  box: { minX: number; maxX: number; minY: number; maxY: number }
+): boolean {
+  const { minX, maxX, minY, maxY } = box;
+
+  // 1. Centerline segment check
+  if (isSegmentIntersectingBox(beam.start, beam.end, minX, maxX, minY, maxY)) {
+    return true;
+  }
+
+  // 2. Beam body rectangle check
+  const bdx = beam.end.x - beam.start.x;
+  const bdy = beam.end.y - beam.start.y;
+  const blen = Math.hypot(bdx, bdy);
+  if (blen > 0) {
+    const hw = Math.max(10, (beam.widthCm * pixelsPerCm) / 2);
+    const nx = (-bdy / blen) * hw;
+    const ny = (bdx / blen) * hw;
+    const c1: Point = { x: beam.start.x + nx, y: beam.start.y + ny };
+    const c2: Point = { x: beam.start.x - nx, y: beam.start.y - ny };
+    const c3: Point = { x: beam.end.x - nx, y: beam.end.y - ny };
+    const c4: Point = { x: beam.end.x + nx, y: beam.end.y + ny };
+    const beamPoly: [Point, Point, Point, Point] = [c1, c2, c3, c4];
+
+    for (const pt of beamPoly) {
+      if (pt.x >= minX && pt.x <= maxX && pt.y >= minY && pt.y <= maxY) return true;
+    }
+    for (let i = 0; i < 4; i++) {
+      if (isSegmentIntersectingBox(beamPoly[i], beamPoly[(i + 1) % 4], minX, maxX, minY, maxY)) {
+        return true;
+      }
+    }
+    const boxCenter: Point = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+    if (isPointInOrNearPolygon(boxCenter, beamPoly, 0)) return true;
+  }
+
+  // 3. Placed Panels check
+  for (const panel of beamPanels) {
+    const poly = getPlacedPanelPolygon(panel, beam, pixelsPerCm);
+    for (const pt of poly) {
+      if (pt.x >= minX && pt.x <= maxX && pt.y >= minY && pt.y <= maxY) return true;
+    }
+    for (let i = 0; i < 4; i++) {
+      if (isSegmentIntersectingBox(poly[i], poly[(i + 1) % 4], minX, maxX, minY, maxY)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   canvasRef,
   pdfImageUrl,
@@ -117,6 +211,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   selectedBeamId = null,
   selectedBeamIds,
   onSelectBeam,
+  onBatchSelectBeams,
   onMoveBeam,
   onBatchMoveBeams,
   onDeleteBeam,
@@ -144,6 +239,47 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   const [drawStart, setDrawStart] = useState<Point | null>(null);
   const [currentMousePos, setCurrentMousePos] = useState<Point | null>(null);
   const [activeSnap, setActiveSnap] = useState<SnapPoint | null>(null);
+
+  // Marquee box selection ("คลุมดำ") state
+  const [marqueeBox, setMarqueeBox] = useState<{
+    start: Point;
+    current: Point;
+    isShift: boolean;
+  } | null>(null);
+
+  // Spacebar pan navigation state
+  const [isSpacePressed, setIsSpacePressed] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.repeat) {
+        const target = e.target as HTMLElement | null;
+        if (
+          target &&
+          (target.tagName === 'INPUT' ||
+            target.tagName === 'TEXTAREA' ||
+            target.tagName === 'SELECT' ||
+            target.isContentEditable)
+        ) {
+          return;
+        }
+        setIsSpacePressed(true);
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setIsSpacePressed(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, []);
 
   // Calibration points state
   const [calibP1, setCalibP1] = useState<Point | null>(null);
@@ -573,6 +709,32 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       }
     }
 
+    // 7. Draw Marquee Selection Box ("คลุมดำ")
+    if (marqueeBox) {
+      const bx = Math.min(marqueeBox.start.x, marqueeBox.current.x);
+      const by = Math.min(marqueeBox.start.y, marqueeBox.current.y);
+      const bw = Math.abs(marqueeBox.current.x - marqueeBox.start.x);
+      const bh = Math.abs(marqueeBox.current.y - marqueeBox.start.y);
+
+      ctx.save();
+      // Translucent slate/blue overlay ("คลุมดำ")
+      ctx.fillStyle = 'rgba(30, 41, 59, 0.16)';
+      ctx.fillRect(bx, by, bw, bh);
+
+      // Inner white boundary
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+      ctx.lineWidth = 1 / zoom;
+      ctx.setLineDash([]);
+      ctx.strokeRect(bx, by, bw, bh);
+
+      // Outer dashed blue border
+      ctx.strokeStyle = '#2563EB';
+      ctx.lineWidth = 1.5 / zoom;
+      ctx.setLineDash([5 / zoom, 3 / zoom]);
+      ctx.strokeRect(bx, by, bw, bh);
+      ctx.restore();
+    }
+
     ctx.restore();
   }, [
     beams,
@@ -580,6 +742,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     snapPoints,
     activeSnap,
     dragState,
+    marqueeBox,
     pdfImage,
     vectorLines,
     gridAxes,
@@ -598,10 +761,29 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
 
   // Mouse Handlers for Pan, Draw, Select, Drag-Move, and Scale Calibration
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    // Specifically cancels/disables drag, draw, or pan from pressing the mouse roller / middle button (e.button === 1) or right click
-    // Only allows left click (e.button === 0) for drawing, selecting, and dragging
-    if (e.button !== 0) {
+    // Specifically cancels/disables drag, draw, or pan from pressing the mouse roller / middle button (e.button === 1)
+    if (e.button === 1) {
       e.preventDefault();
+      return;
+    }
+
+    // Right Click: Pan canvas
+    if (e.button === 2) {
+      e.preventDefault();
+      setIsPanning(true);
+      setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+      return;
+    }
+
+    // Only allow left click (e.button === 0)
+    if (e.button !== 0) {
+      return;
+    }
+
+    // Spacebar + Left Click: Pan canvas
+    if (isSpacePressed) {
+      setIsPanning(true);
+      setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
       return;
     }
 
@@ -838,14 +1020,16 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         return;
       }
 
-      // Clicked empty space -> clear selection
-      if (!isShift) {
-        setSelectedPanelId(null);
-        onSelectBeam(null, false);
-      }
+      // Clicked empty space in Select Mode -> Start Marquee Selection ("คลุมดำ")
+      setMarqueeBox({
+        start: rawWorld,
+        current: rawWorld,
+        isShift,
+      });
+      return;
     }
 
-    // Default: Start Panning
+    // Default: Start Panning for drawing tools or non-select mode
     setIsPanning(true);
     setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
   };
@@ -866,6 +1050,12 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     setActiveSnap(nearestSnap);
     const world: Point = nearestSnap ? { x: nearestSnap.x, y: nearestSnap.y } : rawWorld;
     setCurrentMousePos(world);
+
+    // If currently dragging marquee selection box ("คลุมดำ")
+    if (marqueeBox) {
+      setMarqueeBox((prev) => (prev ? { ...prev, current: rawWorld } : null));
+      return;
+    }
 
     // Dragging a 4-corner box group or individual formwork strip
     if (dragState) {
@@ -925,6 +1115,51 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   };
 
   const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    // 1. Finalize Marquee Selection ("คลุมดำ")
+    if (marqueeBox) {
+      const rawWorld = screenToWorld(e.clientX, e.clientY);
+      const minX = Math.min(marqueeBox.start.x, rawWorld.x);
+      const maxX = Math.max(marqueeBox.start.x, rawWorld.x);
+      const minY = Math.min(marqueeBox.start.y, rawWorld.y);
+      const maxY = Math.max(marqueeBox.start.y, rawWorld.y);
+      const dist = Math.hypot(rawWorld.x - marqueeBox.start.x, rawWorld.y - marqueeBox.start.y);
+
+      // If clicked without dragging (movement < 4px):
+      if (dist < 4 / zoom) {
+        if (!marqueeBox.isShift) {
+          setSelectedPanelId(null);
+          onSelectBeam(null, false);
+        }
+      } else {
+        // Enclosed or intersecting beams selection
+        const box = { minX, maxX, minY, maxY };
+        const matchingBeamIds: string[] = [];
+
+        for (const b of beams) {
+          const beamPanels = panels.filter((p) => p.beamId === b.id);
+          if (isBeamIntersectingBox(b, beamPanels, pixelsPerCm, box)) {
+            matchingBeamIds.push(b.id);
+          }
+        }
+
+        if (onBatchSelectBeams) {
+          onBatchSelectBeams(matchingBeamIds, marqueeBox.isShift);
+        } else {
+          if (matchingBeamIds.length === 0) {
+            if (!marqueeBox.isShift) onSelectBeam(null, false);
+          } else {
+            matchingBeamIds.forEach((id, idx) => {
+              onSelectBeam(id, marqueeBox.isShift || idx > 0);
+            });
+          }
+        }
+      }
+
+      setMarqueeBox(null);
+      setIsPanning(false);
+      return;
+    }
+
     if (dragState) {
       if (dragState.hasMoved) {
         const rawWorld = screenToWorld(e.clientX, e.clientY);
@@ -1007,9 +1242,16 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onWheel={handleWheel}
+        onContextMenu={(e) => e.preventDefault()}
         onAuxClick={(e) => e.preventDefault()}
         className={`w-full h-full block ${
-          dragState
+          isPanning
+            ? 'cursor-grabbing'
+            : isSpacePressed
+            ? 'cursor-grab'
+            : marqueeBox
+            ? 'cursor-crosshair'
+            : dragState
             ? 'cursor-grabbing'
             : activeTool === 'select'
             ? 'cursor-default'
@@ -1107,6 +1349,9 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         </button>
         <span className="px-2 text-xs font-semibold text-slate-600 border-l border-slate-200">
           {Math.round(zoom * 100)}%
+        </span>
+        <span className="hidden md:inline px-2 text-[11px] text-slate-400 border-l border-slate-200 select-none">
+          คลิกขวา หรือ Space+ลาก เพื่อเลื่อนมุมมอง | ลากคลุมดำเพื่อเลือกหลายเส้น
         </span>
       </div>
 

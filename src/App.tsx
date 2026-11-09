@@ -156,6 +156,20 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleBatchSelectBeams = (ids: string[], isShift = false) => {
+    if (ids.length === 0) {
+      if (!isShift) {
+        setSelectedBeamIds([]);
+      }
+      return;
+    }
+    if (isShift) {
+      setSelectedBeamIds((prev) => Array.from(new Set([...prev, ...ids])));
+    } else {
+      setSelectedBeamIds(ids);
+    }
+  };
+
   const handleClearSelection = () => {
     setSelectedBeamIds([]);
   };
@@ -618,6 +632,19 @@ export const App: React.FC = () => {
         } else if (selectedBeamIds.length > 0) {
           setSelectedBeamIds([]);
         }
+      } else if (!isCtrlOrMeta && !e.altKey) {
+        // Quick Tool Switch: 1/Q (Inner Line), 2/W (Inner Box), 3/E (Outer Line), 4/R (Outer Box), V (Select / Marquee)
+        if (e.key === 'v' || e.key === 'V') {
+          setActiveTool('select');
+        } else if (e.key === '1' || e.key === 'q' || e.key === 'Q') {
+          setActiveTool('draw_inner_line');
+        } else if (e.key === '2' || e.key === 'w' || e.key === 'W') {
+          setActiveTool('draw_inner_box');
+        } else if (e.key === '3' || e.key === 'e' || e.key === 'E') {
+          setActiveTool('draw_outer_line');
+        } else if (e.key === '4' || e.key === 'r' || e.key === 'R') {
+          setActiveTool('draw_outer_box');
+        }
       }
     };
 
@@ -762,6 +789,7 @@ export const App: React.FC = () => {
           selectedBeamId={selectedBeamId}
           selectedBeamIds={selectedBeamIds}
           onSelectBeam={handleSelectBeam}
+          onBatchSelectBeams={handleBatchSelectBeams}
           onMoveBeam={handleMoveBeam}
           onBatchMoveBeams={handleBatchMoveBeams}
           onDeleteBeam={handleDeleteBeam}
