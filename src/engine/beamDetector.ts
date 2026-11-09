@@ -2428,7 +2428,8 @@ export function convertDetectedBeamsToFormworkSides(
   }
 
   const mergedSides = mergeCollinearFormworkSides(sides, rawBeams, safeScale);
-  return groupClosedInnerBayLoops(mergedSides, safeScale);
+  const grouped = groupClosedInnerBayLoops(mergedSides, safeScale);
+  return grouped.map((s) => ({ ...s, isAutoDetected: true }));
 }
 
 /**

@@ -261,6 +261,45 @@ export const App: React.FC = () => {
     );
   };
 
+  const handleClearAutoBeams = () => {
+    if (beams.length === 0) {
+      alert('ไม่มีคานบนแบบในขณะนี้ครับ');
+      return;
+    }
+
+    const autoBeams = beams.filter((b) => b.isAutoDetected);
+    const manualBeams = beams.filter((b) => !b.isAutoDetected);
+
+    if (autoBeams.length > 0) {
+      const confirmMsg =
+        manualBeams.length > 0
+          ? `ต้องการลบคานที่ระบบสแกนอัตโนมัติออกทั้งหมด (${autoBeams.length} เส้น) และคงคานที่วาดเองไว้ (${manualBeams.length} เส้น) เพื่อวาดต่อด้วยตนเองใช่หรือไม่?`
+          : `ต้องการลบคานที่สแกนอัตโนมัติออกทั้งหมด (${autoBeams.length} เส้น) เพื่อเริ่มวาดคานเองใช่หรือไม่?`;
+
+      if (window.confirm(confirmMsg)) {
+        updateBeamsWithHistory(manualBeams);
+        setSelectedBeamIds([]);
+        setActiveTool('draw_inner_box');
+        alert(
+          `ลบคานออโต้ออกเรียบร้อยแล้ว (${autoBeams.length} เส้น) ระบบสลับไปใช้เครื่องมือ "ตีกรอบวงใน" เพื่อให้คุณเริ่มวาดคานเองได้ทันทีครับ`
+        );
+      }
+    } else {
+      if (
+        window.confirm(
+          `ต้องการลบคานทั้งหมด (${beams.length} เส้น) เพื่อเริ่มวาดคานเองใหม่ใช่หรือไม่?`
+        )
+      ) {
+        updateBeamsWithHistory([]);
+        setSelectedBeamIds([]);
+        setActiveTool('draw_inner_box');
+        alert(
+          'ลบคานทั้งหมดเรียบร้อยแล้ว ระบบสลับไปใช้เครื่องมือ "ตีกรอบวงใน" เพื่อให้คุณเริ่มวาดคานเองได้ทันทีครับ'
+        );
+      }
+    }
+  };
+
   const handleRunAutoScale = () => {
     const scaleResult = autoDetectScaleFromPlanData(vectorLines, planTexts);
     setPixelsPerCm(scaleResult.pixelsPerCm);
@@ -651,6 +690,9 @@ export const App: React.FC = () => {
         onStartManualScale={handleStartManualScale}
         onRunAutoScale={handleRunAutoScale}
         onAutoDetectBeams={handleAutoDetectBeams}
+        onClearAutoBeams={handleClearAutoBeams}
+        hasBeams={beams.length > 0}
+        hasAutoBeams={beams.some((b) => b.isAutoDetected)}
         currentScale={pixelsPerCm}
         scaleNote={scaleNote}
         defaultHeight={defaultHeight}

@@ -14,6 +14,7 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
     expect(screen.getAllByText(/120 ซม\./i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/นำเข้า PDF แปลนคาน/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/สแกนคาน \(Auto 50 ซม\.\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/ลบคานออโต้ \(วาดเอง\)/i)).toBeInTheDocument();
 
     // Undo / Redo / Save / Load / PDF buttons
     expect(screen.getByTitle(/ย้อนกลับ \(Undo: Ctrl \+ Z\)/i)).toBeInTheDocument();

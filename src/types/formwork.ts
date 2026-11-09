@@ -208,6 +208,7 @@ export interface BeamElement {
    */
   boxGroupId?: string;
   boxSide?: 'top' | 'right' | 'bottom' | 'left';
+  isAutoDetected?: boolean;
   leftSide: BeamSideConfig;
   rightSide: BeamSideConfig;
 }

@@ -17,6 +17,7 @@ import {
   Save,
   FolderOpen,
   FileText,
+  Eraser,
 } from 'lucide-react';
 import { DrawingToolMode, FORMWORK_HEIGHTS, FormworkHeight } from '../types/formwork';
 
@@ -26,6 +27,9 @@ interface TopToolbarProps {
   onStartManualScale: () => void;
   onRunAutoScale: () => void;
   onAutoDetectBeams: () => void;
+  onClearAutoBeams: () => void;
+  hasBeams: boolean;
+  hasAutoBeams?: boolean;
   currentScale: number;
   scaleNote: string;
   defaultHeight: FormworkHeight;
@@ -54,6 +58,9 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   onStartManualScale,
   onRunAutoScale,
   onAutoDetectBeams,
+  onClearAutoBeams,
+  hasBeams,
+  hasAutoBeams,
   currentScale,
   scaleNote,
   defaultHeight,
@@ -350,6 +357,27 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         >
           <Scan className="w-3.5 h-3.5 text-blue-600" />
           <span>สแกนคาน (Auto 50 ซม.)</span>
+        </button>
+
+        {/* Clear Auto Beams Action */}
+        <button
+          onClick={onClearAutoBeams}
+          disabled={!hasBeams}
+          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all shadow-2xs ${
+            hasAutoBeams
+              ? 'text-rose-700 bg-rose-50 border border-rose-300 hover:bg-rose-100 active:scale-95 cursor-pointer'
+              : hasBeams
+              ? 'text-rose-700 bg-rose-50 border border-rose-200 hover:bg-rose-100 active:scale-95 cursor-pointer'
+              : 'text-slate-300 bg-slate-50 border border-slate-200 cursor-not-allowed opacity-60'
+          }`}
+          title={
+            hasAutoBeams
+              ? 'ลบคานที่ระบบสแกนอัตโนมัติออกทั้งหมด เพื่อสลับไปเริ่มวาดคานเองด้วยมือ'
+              : 'ลบคานทั้งหมดเพื่อเริ่มวาดคานเองด้วยมือ'
+          }
+        >
+          <Eraser className="w-3.5 h-3.5 text-rose-600" />
+          <span>ลบคานออโต้ (วาดเอง)</span>
         </button>
 
         {/* Auto Place Formwork Action */}
