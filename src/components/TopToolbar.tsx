@@ -18,6 +18,7 @@ import {
   FolderOpen,
   FileText,
   Eraser,
+  Grid,
 } from 'lucide-react';
 import { DrawingToolMode, FORMWORK_HEIGHTS, FormworkHeight } from '../types/formwork';
 
@@ -28,8 +29,10 @@ interface TopToolbarProps {
   onRunAutoScale: () => void;
   onAutoDetectBeams: () => void;
   onClearAutoBeams: () => void;
+  onClearGrid: () => void;
   hasBeams: boolean;
   hasAutoBeams?: boolean;
+  hasGrid?: boolean;
   currentScale: number;
   scaleNote: string;
   defaultHeight: FormworkHeight;
@@ -59,8 +62,10 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   onRunAutoScale,
   onAutoDetectBeams,
   onClearAutoBeams,
+  onClearGrid,
   hasBeams,
   hasAutoBeams,
+  hasGrid = false,
   currentScale,
   scaleNote,
   defaultHeight,
@@ -378,6 +383,21 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         >
           <Eraser className="w-3.5 h-3.5 text-rose-600" />
           <span>ลบคานออโต้ (วาดเอง)</span>
+        </button>
+
+        {/* Clear Auto Grid Action */}
+        <button
+          onClick={onClearGrid}
+          disabled={!hasGrid}
+          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all shadow-2xs ${
+            hasGrid
+              ? 'text-amber-800 bg-amber-50 border border-amber-300 hover:bg-amber-100 active:scale-95 cursor-pointer'
+              : 'text-slate-300 bg-slate-50 border border-slate-200 cursor-not-allowed opacity-60'
+          }`}
+          title="ลบแกนเส้นกริด (1, 2, 3... A, B, C...) และจุดตัดกริดที่ตรวจจับอัตโนมัติออกทั้งหมด"
+        >
+          <Grid className="w-3.5 h-3.5 text-amber-600" />
+          <span>ล้างกริดออโต้</span>
         </button>
 
         {/* Auto Place Formwork Action */}

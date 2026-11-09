@@ -300,6 +300,31 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleClearGrid = () => {
+    const hasGrid =
+      (gridAxes && (gridAxes.horizontal.length > 0 || gridAxes.vertical.length > 0)) ||
+      gridIntersections.length > 0;
+
+    if (!hasGrid) {
+      alert('ไม่มีเส้นกริดบนแบบในขณะนี้ครับ');
+      return;
+    }
+
+    const hCount = gridAxes?.horizontal.length || 0;
+    const vCount = gridAxes?.vertical.length || 0;
+    const iCount = gridIntersections.length;
+
+    if (
+      window.confirm(
+        `ต้องการลบแกนเส้นกริด (แนวนอน ${hCount} แกน, แนวตั้ง ${vCount} แกน) และจุดตัดกริด (${iCount} จุด) ที่ตรวจจับอัตโนมัติออกทั้งหมดใช่หรือไม่?`
+      )
+    ) {
+      setGridAxes(undefined);
+      setGridIntersections([]);
+      alert('ลบแกนเส้นกริดและจุดตัดกริดออกเรียบร้อยแล้วครับ');
+    }
+  };
+
   const handleRunAutoScale = () => {
     const scaleResult = autoDetectScaleFromPlanData(vectorLines, planTexts);
     setPixelsPerCm(scaleResult.pixelsPerCm);
@@ -691,8 +716,15 @@ export const App: React.FC = () => {
         onRunAutoScale={handleRunAutoScale}
         onAutoDetectBeams={handleAutoDetectBeams}
         onClearAutoBeams={handleClearAutoBeams}
+        onClearGrid={handleClearGrid}
         hasBeams={beams.length > 0}
         hasAutoBeams={beams.some((b) => b.isAutoDetected)}
+        hasGrid={
+          !!(
+            (gridAxes && (gridAxes.horizontal.length > 0 || gridAxes.vertical.length > 0)) ||
+            gridIntersections.length > 0
+          )
+        }
         currentScale={pixelsPerCm}
         scaleNote={scaleNote}
         defaultHeight={defaultHeight}
