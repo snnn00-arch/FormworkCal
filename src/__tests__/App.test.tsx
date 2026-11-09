@@ -94,6 +94,30 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
     // V -> select
     fireEvent.keyDown(window, { key: 'v' });
     expect(screen.getByRole('button', { name: /เลือก \/ คลุมดำ \(V\)/i })).toHaveClass('bg-white');
+
+    // H -> pan
+    fireEvent.keyDown(window, { key: 'h' });
+    expect(screen.getByRole('button', { name: /เลื่อนแปลน \(H\)/i })).toHaveClass('bg-white');
+  });
+
+  it('supports pan button and mouse roller (middle button) drag to pan canvas', () => {
+    const { container } = render(<App />);
+    const canvas = container.querySelector('canvas')!;
+
+    // 1. Click Pan button in toolbar
+    const panBtn = screen.getByRole('button', { name: /เลื่อนแปลน \(H\)/i });
+    fireEvent.click(panBtn);
+    expect(panBtn).toHaveClass('bg-white');
+
+    // Drag with left click in Pan mode
+    fireEvent.mouseDown(canvas, { clientX: 200, clientY: 200, button: 0 });
+    fireEvent.mouseMove(canvas, { clientX: 250, clientY: 250 });
+    fireEvent.mouseUp(canvas, { clientX: 250, clientY: 250 });
+
+    // 2. Press mouse roller (button 1) anywhere to pan directly
+    fireEvent.mouseDown(canvas, { clientX: 300, clientY: 300, button: 1 });
+    fireEvent.mouseMove(canvas, { clientX: 380, clientY: 380 });
+    fireEvent.mouseUp(canvas, { clientX: 380, clientY: 380 });
   });
 
   it('supports marquee selection ("คลุมดำ") to box-select beams on canvas', () => {

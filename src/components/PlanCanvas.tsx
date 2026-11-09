@@ -8,7 +8,7 @@ import {
 import { SnapPoint, GridAxis, GridIntersection } from '../engine/beamDetector';
 import { RawVectorLine } from '../engine/scaleCalibrator';
 import { getBeamLengthCm, getPlacedPanelPolygon } from '../engine/formworkOptimizer';
-import { ZoomIn, ZoomOut, RotateCcw, Upload, Trash2, Move, Scissors } from 'lucide-react';
+import { ZoomIn, ZoomOut, RotateCcw, Upload, Trash2, Move, Scissors, Hand } from 'lucide-react';
 
 interface PlanCanvasProps {
   canvasRef: React.RefObject<HTMLCanvasElement>;
@@ -35,6 +35,7 @@ interface PlanCanvasProps {
   onResizeBoxGroup?: (boxGroupId: string, anchorPt: Point, newCornerPt: Point, finalize?: boolean) => void;
   onUngroupBox?: (boxGroupId: string) => void;
   activeTool: DrawingToolMode | 'draw_beam';
+  onChangeActiveTool?: (mode: DrawingToolMode) => void;
   onAddBeam: (start: Point, end: Point, toolMode?: DrawingToolMode | 'draw_beam') => void;
   scaleMode: 'none' | 'manual_p1' | 'manual_p2';
   onCalibrationPointsSelected: (p1: Point, p2: Point) => void;
@@ -218,6 +219,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   onResizeBoxGroup,
   onUngroupBox,
   activeTool,
+  onChangeActiveTool,
   onAddBeam,
   scaleMode,
   onCalibrationPointsSelected,
@@ -278,6 +280,17 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, []);
+
+  // Global mouseup listener to stop panning smoothly when mouse is released anywhere
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      setIsPanning(false);
+    };
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+    return () => {
+      window.removeEventListener('mouseup', handleGlobalMouseUp);
     };
   }, []);
 
@@ -761,13 +774,15 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
 
   // Mouse Handlers for Pan, Draw, Select, Drag-Move, and Scale Calibration
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    // Specifically cancels/disables drag, draw, or pan from pressing the mouse roller / middle button (e.button === 1)
+    // 1. Mouse Roller / Middle Button: Pan canvas!
     if (e.button === 1) {
       e.preventDefault();
+      setIsPanning(true);
+      setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
       return;
     }
 
-    // Right Click: Pan canvas
+    // 2. Right Click: Pan canvas
     if (e.button === 2) {
       e.preventDefault();
       setIsPanning(true);
@@ -775,13 +790,13 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       return;
     }
 
-    // Only allow left click (e.button === 0)
+    // Only allow left click (e.button === 0) for drawing, selecting, dragging, or pan tool
     if (e.button !== 0) {
       return;
     }
 
-    // Spacebar + Left Click: Pan canvas
-    if (isSpacePressed) {
+    // 3. Spacebar + Left Click OR Pan Tool Active: Pan canvas
+    if (isSpacePressed || activeTool === 'pan') {
       setIsPanning(true);
       setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
       return;
@@ -1223,6 +1238,8 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         return drawStart
           ? 'คลิกมุมตรงข้ามของขอบนอกคาน เพื่อสร้างไม้แบบเกาะครบ 4 ด้านรอบวงนอก'
           : 'วิธีที่ 2 (ตีกรอบวงนอก): คลิกมุมที่ 1 ของเส้นขอบด้านนอกคาน';
+      case 'pan':
+        return 'เครื่องมือเลื่อนแปลน (Pan): คลิกค้างแล้วลากเพื่อเลื่อนดูส่วนต่างๆ (หรือกดคีย์ V เพื่อกลับไปโหมดเลือก)';
       default:
         return null;
     }
@@ -1247,7 +1264,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         className={`w-full h-full block ${
           isPanning
             ? 'cursor-grabbing'
-            : isSpacePressed
+            : isSpacePressed || activeTool === 'pan'
             ? 'cursor-grab'
             : marqueeBox
             ? 'cursor-crosshair'
@@ -1321,18 +1338,31 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         </div>
       )}
 
-      {/* Floating Canvas Controls (Zoom In/Out/Reset) */}
+      {/* Floating Canvas Controls (Pan / Zoom In/Out/Reset) */}
       <div className="absolute bottom-4 left-4 flex items-center gap-1 bg-white/95 backdrop-blur-xs p-1 rounded-lg border border-[#E2E8F0] shadow-sm">
+        {onChangeActiveTool && (
+          <button
+            onClick={() => onChangeActiveTool(activeTool === 'pan' ? 'select' : 'pan')}
+            className={`p-1.5 rounded transition-all cursor-pointer ${
+              activeTool === 'pan'
+                ? 'bg-blue-600 text-white shadow-2xs font-semibold'
+                : 'hover:bg-slate-100 text-slate-700'
+            }`}
+            title="เครื่องมือเลื่อนแปลน (Pan: H) หรือกดลูกกลิ้งเมาส์ค้างได้ตลอดเวลา"
+          >
+            <Hand className="w-4 h-4" />
+          </button>
+        )}
         <button
           onClick={() => setZoom((z) => Math.min(z * 1.2, 5))}
-          className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors"
+          className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors cursor-pointer"
           title="ซูมเข้า"
         >
           <ZoomIn className="w-4 h-4" />
         </button>
         <button
           onClick={() => setZoom((z) => Math.max(z * 0.8, 0.2))}
-          className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors"
+          className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors cursor-pointer"
           title="ซูมออก"
         >
           <ZoomOut className="w-4 h-4" />
@@ -1342,7 +1372,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
             setZoom(1);
             setPan({ x: 50, y: 50 });
           }}
-          className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors"
+          className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors cursor-pointer"
           title="รีเซ็ตมุมมอง (100%)"
         >
           <RotateCcw className="w-4 h-4" />
@@ -1351,7 +1381,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
           {Math.round(zoom * 100)}%
         </span>
         <span className="hidden md:inline px-2 text-[11px] text-slate-400 border-l border-slate-200 select-none">
-          คลิกขวา หรือ Space+ลาก เพื่อเลื่อนมุมมอง | ลากคลุมดำเพื่อเลือกหลายเส้น
+          กดลูกกลิ้งเมาส์ค้าง หรือคลิกขวา เพื่อเลื่อนมุมมอง | ลากคลุมดำเพื่อเลือกหลายเส้น
         </span>
       </div>
 

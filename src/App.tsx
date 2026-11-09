@@ -633,9 +633,11 @@ export const App: React.FC = () => {
           setSelectedBeamIds([]);
         }
       } else if (!isCtrlOrMeta && !e.altKey) {
-        // Quick Tool Switch: 1/Q (Inner Line), 2/W (Inner Box), 3/E (Outer Line), 4/R (Outer Box), V (Select / Marquee)
+        // Quick Tool Switch: 1/Q (Inner Line), 2/W (Inner Box), 3/E (Outer Line), 4/R (Outer Box), V (Select / Marquee), H/P (Pan)
         if (e.key === 'v' || e.key === 'V') {
           setActiveTool('select');
+        } else if (e.key === 'h' || e.key === 'H' || e.key === 'p' || e.key === 'P') {
+          setActiveTool('pan');
         } else if (e.key === '1' || e.key === 'q' || e.key === 'Q') {
           setActiveTool('draw_inner_line');
         } else if (e.key === '2' || e.key === 'w' || e.key === 'W') {
@@ -796,6 +798,7 @@ export const App: React.FC = () => {
           onResizeBoxGroup={handleResizeBoxGroup}
           onUngroupBox={handleUngroupBox}
           activeTool={activeTool}
+          onChangeActiveTool={setActiveTool}
           onAddBeam={handleAddBeam}
           scaleMode={scaleMode}
           onCalibrationPointsSelected={handleCalibrationPointsSelected}

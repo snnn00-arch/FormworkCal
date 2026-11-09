@@ -161,6 +161,7 @@ export const DEFAULT_BEAM_WIDTH_CM = 20 as const;
 
 export type DrawingToolMode =
   | 'select'
+  | 'pan'
   | 'draw_inner_line'
   | 'draw_outer_line'
   | 'draw_inner_box'

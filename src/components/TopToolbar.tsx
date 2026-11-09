@@ -19,6 +19,7 @@ import {
   FileText,
   Eraser,
   Grid,
+  Hand,
 } from 'lucide-react';
 import { DrawingToolMode, FORMWORK_HEIGHTS, FormworkHeight } from '../types/formwork';
 
@@ -282,6 +283,20 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           >
             <MousePointer className="w-3 h-3" />
             <span>เลือก / คลุมดำ (V)</span>
+          </button>
+
+          {/* Pan / Hand Tool */}
+          <button
+            onClick={() => onChangeActiveTool('pan')}
+            className={`px-2 py-1 rounded flex items-center gap-1 font-medium transition-all ${
+              activeTool === 'pan'
+                ? 'bg-white text-slate-900 shadow-2xs font-semibold'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+            title="เครื่องมือเลื่อนแปลน (Pan) (คีย์ลัด: H หรือ P): คลิกค้างแล้วลากเพื่อเลื่อนดูส่วนต่างๆ (หรือกดลูกกลิ้งเมาส์ค้างได้ตลอดเวลา)"
+          >
+            <Hand className="w-3 h-3" />
+            <span>เลื่อนแปลน (H)</span>
           </button>
 
           {/* Method 1: Inner Perimeter (Line & Box) */}
