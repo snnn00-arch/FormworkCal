@@ -106,6 +106,19 @@ function findNearestSnapPoint(
   return best;
 }
 
+// Force point to orthogonal straight line along X or Y axis relative to anchor point
+function applyAxisLock(anchor: Point, target: Point): Point {
+  const dx = Math.abs(target.x - anchor.x);
+  const dy = Math.abs(target.y - anchor.y);
+  if (dx >= dy) {
+    // Closer to horizontal -> lock Y to anchor.y
+    return { x: target.x, y: anchor.y };
+  } else {
+    // Closer to vertical -> lock X to anchor.x
+    return { x: anchor.x, y: target.y };
+  }
+}
+
 // 2D Line Segment vs AABB Intersection (Liang-Barsky algorithm)
 function isSegmentIntersectingBox(
   p1: Point,
@@ -251,9 +264,14 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
 
   // Spacebar pan navigation state
   const [isSpacePressed, setIsSpacePressed] = useState<boolean>(false);
+  // Shift key axis-lock state (for straight orthogonal lines)
+  const [isShiftPressed, setIsShiftPressed] = useState<boolean>(false);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') {
+        setIsShiftPressed(true);
+      }
       if (e.code === 'Space' && !e.repeat) {
         const target = e.target as HTMLElement | null;
         if (
@@ -270,16 +288,26 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') {
+        setIsShiftPressed(false);
+      }
       if (e.code === 'Space') {
         setIsSpacePressed(false);
       }
     };
 
+    const handleBlur = () => {
+      setIsShiftPressed(false);
+      setIsSpacePressed(false);
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
     };
   }, []);
 
@@ -717,14 +745,37 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       ctx.stroke();
 
       if (currentMousePos) {
+        const endPt = isShiftPressed
+          ? applyAxisLock(calibP1, currentMousePos)
+          : currentMousePos;
+
         ctx.strokeStyle = '#F59E0B';
-        ctx.lineWidth = 1.5 / zoom;
+        ctx.lineWidth = 2 / zoom;
         ctx.setLineDash([4 / zoom, 4 / zoom]);
         ctx.beginPath();
         ctx.moveTo(calibP1.x, calibP1.y);
-        ctx.lineTo(currentMousePos.x, currentMousePos.y);
+        ctx.lineTo(endPt.x, endPt.y);
         ctx.stroke();
         ctx.setLineDash([]);
+
+        // Show Axis constraint badge when Shift is active
+        if (isShiftPressed) {
+          const isH = Math.abs(currentMousePos.x - calibP1.x) >= Math.abs(currentMousePos.y - calibP1.y);
+          ctx.fillStyle = '#D97706';
+          ctx.font = `700 ${Math.max(9, 10 / zoom)}px "Plus Jakarta Sans", sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.fillText(
+            isH ? '⬌ ล็อกแนวนอน (แกน X)' : '⬍ ล็อกแนวตั้ง (แกน Y)',
+            (calibP1.x + endPt.x) / 2,
+            (calibP1.y + endPt.y) / 2 - 8 / zoom
+          );
+        }
+
+        // Draw endpoint circle
+        ctx.fillStyle = '#F59E0B';
+        ctx.beginPath();
+        ctx.arc(endPt.x, endPt.y, 4 / zoom, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
 
@@ -775,6 +826,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     currentMousePos,
     scaleMode,
     calibP1,
+    isShiftPressed,
     pixelsPerCm,
   ]);
 
@@ -827,7 +879,8 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       if (!calibP1) {
         setCalibP1(world);
       } else {
-        onCalibrationPointsSelected(calibP1, world);
+        const finalWorld = e.shiftKey || isShiftPressed ? applyAxisLock(calibP1, world) : world;
+        onCalibrationPointsSelected(calibP1, finalWorld);
         setCalibP1(null);
       }
       return;
@@ -1076,7 +1129,10 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         : null;
 
     setActiveSnap(nearestSnap);
-    const world: Point = nearestSnap ? { x: nearestSnap.x, y: nearestSnap.y } : rawWorld;
+    let world: Point = nearestSnap ? { x: nearestSnap.x, y: nearestSnap.y } : rawWorld;
+    if (scaleMode !== 'none' && calibP1 && (e.shiftKey || isShiftPressed)) {
+      world = applyAxisLock(calibP1, world);
+    }
     setCurrentMousePos(world);
 
     // If currently dragging marquee selection box ("คลุมดำ")
@@ -1405,7 +1461,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
         <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-amber-500 text-white px-4 py-1.5 rounded-full text-xs font-semibold shadow-md flex items-center gap-2">
           <span>
             {calibP1
-              ? 'คลิกจุดที่ 2 บนแปลนเพื่อสิ้นสุดการวัดระยะสเกล'
+              ? 'คลิกจุดที่ 2 บนแปลน (กด Shift ค้างเพื่อบังคับแนวแกนตรง X/Y)'
               : 'คลิกจุดที่ 1 บนแปลนเพื่อเริ่มเซตสเกล'}
           </span>
         </div>

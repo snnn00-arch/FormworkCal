@@ -166,7 +166,7 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
     fireEvent.mouseDown(canvas, { clientX: 98, clientY: 102 });
 
     // Banner indicates waiting for second point
-    expect(screen.getByText(/คลิกจุดที่ 2 บนแปลนเพื่อสิ้นสุดการวัดระยะสเกล/i)).toBeInTheDocument();
+    expect(screen.getByText(/คลิกจุดที่ 2 บนแปลน/i)).toBeInTheDocument();
 
     // Hover near endpoint 2 (297, 101) -> should magnetically snap to (300, 100)
     fireEvent.mouseMove(canvas, { clientX: 297, clientY: 101 });
@@ -175,6 +175,39 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
     fireEvent.mouseDown(canvas, { clientX: 297, clientY: 101 });
 
     // Scale should be recalculated and updated
+    expect(screen.getByText(/px\/ซม\./i)).toBeInTheDocument();
+  });
+
+  it('supports holding Shift to force orthogonal axis lock (X/Y) during manual scale calibration', () => {
+    const { container } = render(<App />);
+    const canvas = container.querySelector('canvas')!;
+
+    // Click Manual Scale button
+    const manualScaleBtn = screen.getByRole('button', { name: /Manual Scale/i });
+    fireEvent.click(manualScaleBtn);
+
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('2.00');
+
+    // Click point 1 at (100, 100)
+    fireEvent.mouseDown(canvas, { clientX: 100, clientY: 100 });
+
+    // Banner indicates waiting for second point with Shift hint
+    expect(screen.getByText(/กด Shift ค้างเพื่อบังคับแนวแกนตรง X\/Y/i)).toBeInTheDocument();
+
+    // Press Shift key
+    fireEvent.keyDown(window, { key: 'Shift' });
+
+    // Move mouse diagonally (300, 150) -> dx=200, dy=50 => horizontal lock should force Y to 100
+    fireEvent.mouseMove(canvas, { clientX: 300, clientY: 150, shiftKey: true });
+
+    // Click point 2 while Shift is active
+    fireEvent.mouseDown(canvas, { clientX: 300, clientY: 150, shiftKey: true });
+
+    // Release Shift
+    fireEvent.keyUp(window, { key: 'Shift' });
+
+    // Scale should be updated
+    expect(promptSpy).toHaveBeenCalled();
     expect(screen.getByText(/px\/ซม\./i)).toBeInTheDocument();
   });
 });
