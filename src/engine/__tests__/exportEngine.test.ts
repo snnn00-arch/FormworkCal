@@ -8,7 +8,7 @@ import {
   renderHighResPlanCanvas,
   loadImage,
 } from '../exportEngine';
-import { FormworkProjectData } from '../../types/formwork';
+import { FormworkProjectData, BeamElement } from '../../types/formwork';
 
 describe('exportEngine', () => {
   it('generates UTF-8 BOM CSV with 3 lengths x 4 heights matrix, 5cm thickness, and free-length items', () => {
@@ -93,5 +93,58 @@ describe('exportEngine', () => {
     expect(res.canvas).toBeDefined();
     expect(res.canvas.width).toBe(3510);
     expect(res.canvas.height).toBe(2340);
+  });
+
+  it('renders beams with width and places panels using getPlacedPanelPolygon correctly', () => {
+    const mockBeam: BeamElement = {
+      id: 'beam-1',
+      name: 'B1',
+      start: { x: 200, y: 300 },
+      end: { x: 800, y: 300 },
+      widthCm: 20,
+      defaultHeightCm: 50,
+      thicknessCm: 5,
+      attachMode: 'dual_beam',
+      leftSide: { side: 'left', enabled: true, heightCm: 50, startExtensionCm: 0, endExtensionCm: 0 },
+      rightSide: { side: 'right', enabled: true, heightCm: 50, startExtensionCm: 0, endExtensionCm: 0 },
+    };
+    const panels = optimizeSingleSidePanels(600, 50, 'beam-1', 'B1', 'left');
+
+    const res = renderHighResPlanCanvas(3510, 2340, {
+      beams: [mockBeam],
+      panels,
+      pixelsPerCm: 1.0,
+    });
+
+    expect(res.canvas).toBeDefined();
+    expect(res.canvas.width).toBe(3510);
+    expect(res.canvas.height).toBe(2340);
+    expect(res.realWidthM).toBeGreaterThan(0);
+    expect(res.paperScale).toBeGreaterThan(0);
+  });
+
+  it('auto-crops around beams when printBoundary is not specified', () => {
+    const mockBeam: BeamElement = {
+      id: 'beam-corner',
+      name: 'B2',
+      start: { x: 1000, y: 1500 },
+      end: { x: 1600, y: 1500 },
+      widthCm: 25,
+      defaultHeightCm: 60,
+      thicknessCm: 5,
+      attachMode: 'single_edge',
+      leftSide: { side: 'left', enabled: true, heightCm: 60, startExtensionCm: 0, endExtensionCm: 0 },
+      rightSide: { side: 'right', enabled: false, heightCm: 60, startExtensionCm: 0, endExtensionCm: 0 },
+    };
+
+    const res = renderHighResPlanCanvas(3510, 2340, {
+      beams: [mockBeam],
+      panels: [],
+      pixelsPerCm: 1.5,
+    });
+
+    // Verify it crops around the beam (around 600px width + padding) rather than 3510 full canvas
+    expect(res.realWidthM).toBeLessThan(10); // 600px / 1.5ppc = 400cm = 4m (+ padding), well under 10m
+    expect(res.paperScale).toBeGreaterThan(0);
   });
 });

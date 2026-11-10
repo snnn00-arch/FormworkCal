@@ -10,6 +10,7 @@ import {
   PrintBoundary,
 } from '../types/formwork';
 import { GridAxis, GridIntersection } from './beamDetector';
+import { getPlacedPanelPolygon } from './formworkOptimizer';
 
 export function generateRentalSummaryCsv(summary: RentalSummaryReport): string {
   const lines: string[] = [];
@@ -146,7 +147,10 @@ export function loadImage(url: string): Promise<HTMLImageElement> {
     }
 
     const img = new Image();
-    img.crossOrigin = 'anonymous';
+    // Do not set crossOrigin on inline data: URLs (avoids canvas taint / load failure bugs)
+    if (!url.startsWith('data:')) {
+      img.crossOrigin = 'anonymous';
+    }
 
     let settled = false;
     const finish = () => {
@@ -156,15 +160,21 @@ export function loadImage(url: string): Promise<HTMLImageElement> {
       }
     };
 
-    img.onload = finish;
+    img.onload = () => {
+      if ('decode' in img && typeof img.decode === 'function') {
+        img.decode().then(finish).catch(finish);
+      } else {
+        finish();
+      }
+    };
     img.onerror = finish;
     img.src = url;
 
-    if (img.complete) {
+    if (img.complete && img.naturalWidth > 0) {
       finish();
     }
 
-    setTimeout(finish, 2500);
+    setTimeout(finish, 10000);
   });
 }
 
@@ -197,38 +207,52 @@ export function renderHighResPlanCanvas(
   canvas.width = targetW;
   canvas.height = targetH;
   const ctx = canvas.getContext('2d');
-  const targetRatio = targetW / targetH; // 2520 / 1782 = 1.41414... (A3 paper aspect ratio)
+  const targetRatio = targetW / targetH; // 3510 / 2340 = 1.500 (A3 report aspect ratio)
   let cropBox: { x: number; y: number; width: number; height: number };
 
   if (options.printBoundary && options.printBoundary.width > 20 && options.printBoundary.height > 20) {
-    cropBox = { ...options.printBoundary };
+    let bx = options.printBoundary.x;
+    let by = options.printBoundary.y;
+    let bw = options.printBoundary.width;
+    let bh = options.printBoundary.height;
+    const currentRatio = bw / bh;
+    if (Math.abs(currentRatio - targetRatio) > 0.002) {
+      if (currentRatio > targetRatio) {
+        const targetBh = bw / targetRatio;
+        by -= (targetBh - bh) / 2;
+        bh = targetBh;
+      } else {
+        const targetBw = bh * targetRatio;
+        bx -= (targetBw - bw) / 2;
+        bw = targetBw;
+      }
+    }
+    cropBox = { x: bx, y: by, width: bw, height: bh };
   } else {
-    // Auto-fit to all beams or PDF image
+    // Auto-fit: Prioritize beams (focus on actual work done), fallback to PDF image or canvas
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
 
-    if (options.pdfImage && options.pdfImage.width > 0) {
-      minX = 0;
-      minY = 0;
-      maxX = options.pdfImage.width;
-      maxY = options.pdfImage.height;
-      if (options.beams && options.beams.length > 0) {
-        for (const b of options.beams) {
-          minX = Math.min(minX, b.start.x, b.end.x);
-          maxX = Math.max(maxX, b.start.x, b.end.x);
-          minY = Math.min(minY, b.start.y, b.end.y);
-          maxY = Math.max(maxY, b.start.y, b.end.y);
-        }
-      }
-    } else if (options.beams && options.beams.length > 0) {
+    if (options.beams && options.beams.length > 0) {
       for (const b of options.beams) {
         minX = Math.min(minX, b.start.x, b.end.x);
         maxX = Math.max(maxX, b.start.x, b.end.x);
         minY = Math.min(minY, b.start.y, b.end.y);
         maxY = Math.max(maxY, b.start.y, b.end.y);
       }
+      // Add comfortable padding around drawn beams (50cm in plan units)
+      const pad = Math.max(120, (options.pixelsPerCm || 1.2) * 50);
+      minX -= pad;
+      maxX += pad;
+      minY -= pad;
+      maxY += pad;
+    } else if (options.pdfImage && options.pdfImage.width > 0) {
+      minX = 0;
+      minY = 0;
+      maxX = options.pdfImage.width;
+      maxY = options.pdfImage.height;
     } else if (options.fallbackCanvas && options.fallbackCanvas.width > 0) {
       minX = 0;
       minY = 0;
@@ -241,21 +265,11 @@ export function renderHighResPlanCanvas(
       maxY = 2340;
     }
 
-    // Add 8% comfortable breathing margin
-    const spanX = Math.max(100, maxX - minX);
-    const spanY = Math.max(70, maxY - minY);
-    const padX = spanX * 0.08;
-    const padY = spanY * 0.08;
-    minX -= padX;
-    maxX += padX;
-    minY -= padY;
-    maxY += padY;
-
-    let bw = maxX - minX;
-    let bh = maxY - minY;
+    let bw = Math.max(100, maxX - minX);
+    let bh = Math.max(70, maxY - minY);
     const currentRatio = bw / bh;
 
-    // Enforce targetRatio (1.414)
+    // Enforce targetRatio (1.500)
     if (currentRatio > targetRatio) {
       const targetBh = bw / targetRatio;
       const diffY = (targetBh - bh) / 2;
@@ -294,8 +308,6 @@ export function renderHighResPlanCanvas(
   // Background PDF image
   if (options.pdfImage && options.pdfImage.width > 0) {
     ctx.drawImage(options.pdfImage, 0, 0);
-  } else if (options.fallbackCanvas) {
-    ctx.drawImage(options.fallbackCanvas, 0, 0);
   }
 
   // Architectural CAD Vector Lines Overlay
@@ -344,85 +356,93 @@ export function renderHighResPlanCanvas(
   const beams = options.beams || [];
   const panels = options.panels || [];
 
-  // Draw Beam Lines
+  // Draw Beams: strictly matching PlanCanvas edge geometry
   for (const b of beams) {
-    ctx.strokeStyle = '#1E293B';
-    ctx.lineWidth = Math.max(2, 3 / scale);
-    ctx.beginPath();
-    ctx.moveTo(b.start.x, b.start.y);
-    ctx.lineTo(b.end.x, b.end.y);
-    ctx.stroke();
-  }
-
-  // Draw Formwork Panels with crisp colors and labels
-  const SKU_COLORS: Record<string, { fill: string; stroke: string; text: string }> = {
-    '120': { fill: '#10B981', stroke: '#047857', text: '#FFFFFF' },
-    '100': { fill: '#0EA5E9', stroke: '#0369A1', text: '#FFFFFF' },
-    '50':  { fill: '#F59E0B', stroke: '#B45309', text: '#FFFFFF' },
-    'free': { fill: '#F43F5E', stroke: '#BE123C', text: '#FFFFFF' },
-  };
-
-  const thicknessPx = 5 * safePpc;
-
-  for (const p of panels) {
-    const parentBeam = beams.find((b) => b.id === p.beamId);
-    if (!parentBeam) continue;
-
-    const bDx = parentBeam.end.x - parentBeam.start.x;
-    const bDy = parentBeam.end.y - parentBeam.start.y;
+    const bDx = b.end.x - b.start.x;
+    const bDy = b.end.y - b.start.y;
     const bLen = Math.hypot(bDx, bDy) || 1;
     const ux = bDx / bLen;
     const uy = bDy / bLen;
     const nx = -uy;
     const ny = ux;
-    const sign = p.side === 'left' ? 1 : -1;
 
-    const panelLenPx = p.lengthCm * safePpc;
-    const startOffsetPx = p.offsetStartCm * safePpc;
+    if (b.attachMode === 'single_edge') {
+      ctx.strokeStyle = b.edgeRole === 'outer' ? '#0284C7' : '#4F46E5';
+      ctx.lineWidth = Math.max(1.8, 2.2 / scale);
+      ctx.beginPath();
+      ctx.moveTo(b.start.x, b.start.y);
+      ctx.lineTo(b.end.x, b.end.y);
+      ctx.stroke();
+    } else {
+      const halfW = (b.widthCm * safePpc) / 2;
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = Math.max(1.5, 2.0 / scale);
 
-    const p0x = parentBeam.start.x + ux * startOffsetPx;
-    const p0y = parentBeam.start.y + uy * startOffsetPx;
-    const p1x = p0x + ux * panelLenPx;
-    const p1y = p0y + uy * panelLenPx;
-    const p2x = p1x + nx * sign * thicknessPx;
-    const p2y = p1y + ny * sign * thicknessPx;
-    const p3x = p0x + nx * sign * thicknessPx;
-    const p3y = p0y + ny * sign * thicknessPx;
+      if (b.leftSide.enabled !== false) {
+        ctx.beginPath();
+        ctx.moveTo(b.start.x + nx * halfW, b.start.y + ny * halfW);
+        ctx.lineTo(b.end.x + nx * halfW, b.end.y + ny * halfW);
+        ctx.stroke();
+      }
+      if (b.rightSide.enabled !== false) {
+        ctx.beginPath();
+        ctx.moveTo(b.start.x - nx * halfW, b.start.y - ny * halfW);
+        ctx.lineTo(b.end.x - nx * halfW, b.end.y - ny * halfW);
+        ctx.stroke();
+      }
+    }
 
-    const themeKey = p.type === 'free' ? 'free' : String(p.lengthCm);
-    const theme = SKU_COLORS[themeKey] || SKU_COLORS['50'];
+    // Small unobtrusive beam label
+    const midX = (b.start.x + b.end.x) / 2;
+    const midY = (b.start.y + b.end.y) / 2;
+    ctx.fillStyle = '#0F172A';
+    ctx.font = `600 ${Math.max(10, 12 / scale)}px system-ui, -apple-system, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(b.name, midX, midY);
+  }
 
-    ctx.fillStyle = theme.fill;
-    ctx.strokeStyle = theme.stroke;
-    ctx.lineWidth = Math.max(1, 1.5 / scale);
+  // Draw Formwork Panels using EXACT polygon calculation (Zero shift / 100% true to canvas)
+  for (const p of panels) {
+    const parentBeam = beams.find((b) => b.id === p.beamId);
+    if (!parentBeam) continue;
+
+    const [p1, p2, p3, p4] = getPlacedPanelPolygon(p, parentBeam, safePpc);
+    const theme = p.skuTheme;
+
+    ctx.fillStyle = theme ? theme.fill : (p.type === 'free' ? '#FDA4AF' : '#86EFAC');
+    ctx.strokeStyle = theme ? theme.stroke : (p.type === 'free' ? '#E11D48' : '#059669');
+    ctx.lineWidth = Math.max(1.4, 1.8 / scale);
+
+    if (p.type === 'free') {
+      ctx.setLineDash([4 / scale, 3 / scale]);
+    } else {
+      ctx.setLineDash([]);
+    }
+
     ctx.beginPath();
-    ctx.moveTo(p0x, p0y);
-    ctx.lineTo(p1x, p1y);
-    ctx.lineTo(p2x, p2y);
-    ctx.lineTo(p3x, p3y);
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.lineTo(p3.x, p3.y);
+    ctx.lineTo(p4.x, p4.y);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
+    ctx.setLineDash([]);
 
-    // Centered length text label
-    if (panelLenPx * scale > 16) {
-      const centerX = (p0x + p2x) / 2;
-      const centerY = (p0y + p2y) / 2;
-      ctx.save();
-      ctx.translate(centerX, centerY);
-      let angle = Math.atan2(uy, ux);
-      if (angle > Math.PI / 2 || angle < -Math.PI / 2) {
-        angle += Math.PI;
-      }
-      ctx.rotate(angle);
-      ctx.fillStyle = theme.text;
-      const fontSize = Math.max(10, Math.min(14 / scale, thicknessPx * 0.75));
-      ctx.font = `bold ${fontSize}px system-ui, -apple-system, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(`${p.lengthCm}`, 0, 0);
-      ctx.restore();
-    }
+    // Panel label with size (matching screen e.g. "120×50" or "F35×50")
+    const pMidX = (p1.x + p2.x + p3.x + p4.x) / 4;
+    const pMidY = (p1.y + p2.y + p3.y + p4.y) / 4;
+    ctx.fillStyle = theme ? theme.stroke : '#0F172A';
+    const labelFontSize = Math.max(9, Math.min(13 / scale, 5 * safePpc * 0.8));
+    ctx.font = `bold ${labelFontSize}px system-ui, -apple-system, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const labelText =
+      p.type === 'free'
+        ? `F${p.lengthCm}×${p.heightCm}`
+        : `${p.lengthCm}×${p.heightCm}`;
+    ctx.fillText(labelText, pMidX, pMidY);
   }
 
   ctx.restore();
