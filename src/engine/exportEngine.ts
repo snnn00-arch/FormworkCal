@@ -857,29 +857,25 @@ export async function exportFormworkPdfReport(
   ctx.fill();
 
   ctx.fillStyle = '#FFFFFF';
-  ctx.font = 'bold 28px system-ui, -apple-system, sans-serif';
+  ctx.font = 'bold 30px system-ui, -apple-system, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.fillText('MODULAR FORMWORK CAD', colCardX + colCardW / 2, c1Y + 26);
-
-  ctx.font = '19px system-ui, -apple-system, sans-serif';
-  ctx.fillStyle = '#94A3B8';
-  ctx.fillText('ระบบคำนวณและถอดแบบไม้แบบสำเร็จรูป', colCardX + colCardW / 2, c1Y + 68);
+  ctx.fillText('MODULAR FORMWORK CAD', colCardX + colCardW / 2, c1Y + 36);
 
   ctx.strokeStyle = '#334155';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.moveTo(colCardX + 30, c1Y + 110);
-  ctx.lineTo(colCardX + colCardW - 30, c1Y + 110);
+  ctx.moveTo(colCardX + 30, c1Y + 95);
+  ctx.lineTo(colCardX + colCardW - 30, c1Y + 95);
   ctx.stroke();
 
   ctx.fillStyle = '#38BDF8';
-  ctx.font = 'bold 32px system-ui, -apple-system, sans-serif';
-  ctx.fillText('แบบแปลนติดตั้งไม้แบบคาน', colCardX + colCardW / 2, c1Y + 140);
+  ctx.font = 'bold 34px system-ui, -apple-system, sans-serif';
+  ctx.fillText('แบบแปลนติดตั้งไม้แบบคาน', colCardX + colCardW / 2, c1Y + 128);
 
-  ctx.font = '18px system-ui, -apple-system, sans-serif';
+  ctx.font = '19px system-ui, -apple-system, sans-serif';
   ctx.fillStyle = '#CBD5E1';
-  ctx.fillText('FORMWORK PLACEMENT PLAN (A3)', colCardX + colCardW / 2, c1Y + 195);
+  ctx.fillText('FORMWORK PLACEMENT PLAN (A3)', colCardX + colCardW / 2, c1Y + 188);
 
   // 3B. Card 2: ข้อมูลโครงการและแบบ (Y: 375, H: 440)
   const c2Y = c1Y + c1H + 20;
