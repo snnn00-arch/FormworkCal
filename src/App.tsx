@@ -38,6 +38,7 @@ import {
   generateRentalSummaryCsv,
   loadProjectFile,
   saveProjectFile,
+  loadImage,
 } from './engine/exportEngine';
 import { inspectPdfPages, loadPdfPage, PdfPageSummary } from './utils/pdfLoader';
 import { TopToolbar } from './components/TopToolbar';
@@ -696,6 +697,7 @@ export const App: React.FC = () => {
         totalBeams: beams.length,
         projectName: 'โครงการแบบและการคำนวณไม้แบบ',
         printBoundary,
+        pdfImageUrl,
         vectorLines,
         gridAxes,
         gridIntersections,
@@ -714,10 +716,19 @@ export const App: React.FC = () => {
     downloadCsvFile(csv, 'modular-formwork-order.csv');
   };
 
-  const handleExportPng = () => {
+  const handleExportPng = async () => {
+    let loadedImage: HTMLImageElement | null = null;
+    if (pdfImageUrl) {
+      try {
+        loadedImage = await loadImage(pdfImageUrl);
+      } catch (e) {
+        console.warn('Could not preload pdfImage for PNG export', e);
+      }
+    }
     if (printBoundary) {
       const planRes = renderHighResPlanCanvas(3510, 2340, {
         printBoundary,
+        pdfImage: loadedImage,
         vectorLines,
         gridAxes,
         gridIntersections,

@@ -6,6 +6,7 @@ import {
   saveProjectFile,
   exportFormworkPdfReport,
   renderHighResPlanCanvas,
+  loadImage,
 } from '../exportEngine';
 import { FormworkProjectData } from '../../types/formwork';
 
@@ -76,5 +77,21 @@ describe('exportEngine', () => {
     expect(res.canvas.height).toBe(2340);
     expect(res.realWidthM).toBeGreaterThan(0);
     expect(res.paperScale).toBeGreaterThan(0);
+  });
+
+  it('supports loading PDF image and including it in high-res plan canvas', async () => {
+    expect(typeof loadImage).toBe('function');
+    const img = await loadImage('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==');
+    expect(img).toBeDefined();
+
+    const res = renderHighResPlanCanvas(3510, 2340, {
+      pdfImage: img,
+      beams: [],
+      panels: [],
+      pixelsPerCm: 1.2,
+    });
+    expect(res.canvas).toBeDefined();
+    expect(res.canvas.width).toBe(3510);
+    expect(res.canvas.height).toBe(2340);
   });
 });

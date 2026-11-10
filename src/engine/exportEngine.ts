@@ -133,9 +133,45 @@ export async function loadProjectFile(file: File): Promise<FormworkProjectData> 
   };
 }
 
+export function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve) => {
+    const isJsdom = typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent);
+    if (typeof Image === 'undefined' || isJsdom) {
+      const mockImg = (typeof Image !== 'undefined' ? new Image() : {}) as HTMLImageElement;
+      mockImg.src = url;
+      mockImg.width = 1000;
+      mockImg.height = 700;
+      resolve(mockImg);
+      return;
+    }
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+
+    let settled = false;
+    const finish = () => {
+      if (!settled) {
+        settled = true;
+        resolve(img);
+      }
+    };
+
+    img.onload = finish;
+    img.onerror = finish;
+    img.src = url;
+
+    if (img.complete) {
+      finish();
+    }
+
+    setTimeout(finish, 2500);
+  });
+}
+
 export interface HighResPlanOptions {
   printBoundary?: PrintBoundary | null;
   pdfImage?: HTMLImageElement | null;
+  pdfImageUrl?: string | null;
   vectorLines?: { x1: number; y1: number; x2: number; y2: number }[];
   gridAxes?: {
     horizontal: GridAxis[];
@@ -173,18 +209,26 @@ export function renderHighResPlanCanvas(
     let maxX = -Infinity;
     let maxY = -Infinity;
 
-    if (options.beams && options.beams.length > 0) {
+    if (options.pdfImage && options.pdfImage.width > 0) {
+      minX = 0;
+      minY = 0;
+      maxX = options.pdfImage.width;
+      maxY = options.pdfImage.height;
+      if (options.beams && options.beams.length > 0) {
+        for (const b of options.beams) {
+          minX = Math.min(minX, b.start.x, b.end.x);
+          maxX = Math.max(maxX, b.start.x, b.end.x);
+          minY = Math.min(minY, b.start.y, b.end.y);
+          maxY = Math.max(maxY, b.start.y, b.end.y);
+        }
+      }
+    } else if (options.beams && options.beams.length > 0) {
       for (const b of options.beams) {
         minX = Math.min(minX, b.start.x, b.end.x);
         maxX = Math.max(maxX, b.start.x, b.end.x);
         minY = Math.min(minY, b.start.y, b.end.y);
         maxY = Math.max(maxY, b.start.y, b.end.y);
       }
-    } else if (options.pdfImage && options.pdfImage.width > 0) {
-      minX = 0;
-      minY = 0;
-      maxX = options.pdfImage.width;
-      maxY = options.pdfImage.height;
     } else if (options.fallbackCanvas && options.fallbackCanvas.width > 0) {
       minX = 0;
       minY = 0;
@@ -193,8 +237,8 @@ export function renderHighResPlanCanvas(
     } else {
       minX = 0;
       minY = 0;
-      maxX = 1414;
-      maxY = 1000;
+      maxX = 3510;
+      maxY = 2340;
     }
 
     // Add 8% comfortable breathing margin
@@ -250,7 +294,7 @@ export function renderHighResPlanCanvas(
   // Background PDF image
   if (options.pdfImage && options.pdfImage.width > 0) {
     ctx.drawImage(options.pdfImage, 0, 0);
-  } else if (options.fallbackCanvas && (!options.beams || options.beams.length === 0)) {
+  } else if (options.fallbackCanvas) {
     ctx.drawImage(options.fallbackCanvas, 0, 0);
   }
 
@@ -392,6 +436,7 @@ export interface PdfReportMetadata {
   projectName?: string;
   printBoundary?: PrintBoundary | null;
   pdfImage?: HTMLImageElement | null;
+  pdfImageUrl?: string | null;
   vectorLines?: { x1: number; y1: number; x2: number; y2: number }[];
   gridAxes?: {
     horizontal: GridAxis[];
@@ -491,9 +536,20 @@ export async function exportFormworkPdfReport(
   const safeScale = metadata.pixelsPerCm || metadata.scale || 1.2;
   const totalBeams = metadata.totalBeams ?? (metadata.beams ? metadata.beams.length : 0);
 
+  // Preload PDF plan image if available
+  let pdfImg: HTMLImageElement | null = metadata.pdfImage || null;
+  if (!pdfImg && metadata.pdfImageUrl) {
+    try {
+      pdfImg = await loadImage(metadata.pdfImageUrl);
+    } catch (err) {
+      console.warn('Could not load pdfImageUrl for PDF report:', err);
+    }
+  }
+
   const planResult = renderHighResPlanCanvas(planBoxW, planBoxH, {
     printBoundary: metadata.printBoundary,
-    pdfImage: metadata.pdfImage,
+    pdfImage: pdfImg,
+    pdfImageUrl: metadata.pdfImageUrl,
     vectorLines: metadata.vectorLines,
     gridAxes: metadata.gridAxes,
     gridIntersections: metadata.gridIntersections,
