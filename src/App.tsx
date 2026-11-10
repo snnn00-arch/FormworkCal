@@ -716,7 +716,7 @@ export const App: React.FC = () => {
 
   const handleExportPng = () => {
     if (printBoundary) {
-      const planRes = renderHighResPlanCanvas(2520, 1782, {
+      const planRes = renderHighResPlanCanvas(3510, 2340, {
         printBoundary,
         vectorLines,
         gridAxes,

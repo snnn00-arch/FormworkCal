@@ -817,7 +817,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
     // 8. Draw A3 Print Boundary (Active Drag or Established Boundary)
     const activeBoundary = (() => {
       if (boundaryDragStart && boundaryDragCurrent) {
-        const A3_RATIO = 2520 / 1782; // 1.41414...
+        const A3_RATIO = 3510 / 2340; // 1.500 (Matches A3 report main drawing frame)
         const rawDx = boundaryDragCurrent.x - boundaryDragStart.x;
         const rawDy = boundaryDragCurrent.y - boundaryDragStart.y;
         const signX = rawDx >= 0 ? 1 : -1;
@@ -887,7 +887,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
       const safePpc = pixelsPerCm > 0 ? pixelsPerCm : 1.2;
       const wM = (bw / safePpc) / 100;
       const hM = (bh / safePpc) / 100;
-      const paperScale = Math.max(1, Math.round(wM / 0.252));
+      const paperScale = Math.max(1, Math.round(wM / 0.351));
       const badgeText = `⛶ ขอบเขตพิมพ์ A3: ${wM.toFixed(2)} ม. × ${hM.toFixed(2)} ม. (สเกลกระดาษ A3 ~ 1:${paperScale})`;
 
       const badgeFontSize = Math.max(11, 13 / zoom);
@@ -1327,7 +1327,7 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
     // 0. Finalize Print Boundary
     if (activeTool === 'print_boundary' && boundaryDragStart && boundaryDragCurrent) {
-      const A3_RATIO = 2520 / 1782; // 1.41414...
+      const A3_RATIO = 3510 / 2340; // 1.500 (Matches A3 report main drawing frame)
       const rawDx = boundaryDragCurrent.x - boundaryDragStart.x;
       const rawDy = boundaryDragCurrent.y - boundaryDragStart.y;
       const signX = rawDx >= 0 ? 1 : -1;

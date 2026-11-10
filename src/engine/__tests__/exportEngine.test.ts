@@ -65,15 +65,15 @@ describe('exportEngine', () => {
     expect(typeof saveProjectFile).toBe('function');
   });
 
-  it('renders high-res A3 plan canvas cropped to print boundary with aspect ratio 1.414', () => {
-    const res = renderHighResPlanCanvas(2520, 1782, {
-      printBoundary: { x: 100, y: 100, width: 400, height: 283 },
+  it('renders high-res A3 plan canvas cropped to print boundary with aspect ratio 1.50', () => {
+    const res = renderHighResPlanCanvas(3510, 2340, {
+      printBoundary: { x: 100, y: 100, width: 450, height: 300 },
       beams: [],
       panels: [],
       pixelsPerCm: 1.2,
     });
-    expect(res.canvas.width).toBe(2520);
-    expect(res.canvas.height).toBe(1782);
+    expect(res.canvas.width).toBe(3510);
+    expect(res.canvas.height).toBe(2340);
     expect(res.realWidthM).toBeGreaterThan(0);
     expect(res.paperScale).toBeGreaterThan(0);
   });

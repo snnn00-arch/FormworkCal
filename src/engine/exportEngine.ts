@@ -230,8 +230,9 @@ export function renderHighResPlanCanvas(
   const safePpc = options.pixelsPerCm > 0 ? options.pixelsPerCm : 1.2;
   const realWidthM = cropBox.width / safePpc / 100;
   const realHeightM = cropBox.height / safePpc / 100;
-  // A3 paper frame width on paper is 252mm = 0.252m
-  const paperScale = Math.max(1, Math.round(realWidthM / 0.252));
+  // A3 paper frame width on paper (targetW on 4200px A3 sheet is (targetW / 4200) * 0.420 m)
+  const frameWidthOnPaperM = (targetW / 4200) * 0.42;
+  const paperScale = Math.max(1, Math.round(realWidthM / (frameWidthOnPaperM || 0.351)));
 
   if (!ctx) {
     return { canvas, realWidthM, realHeightM, paperScale };
@@ -427,7 +428,7 @@ export async function exportFormworkPdfReport(
     metadata = (arg3 as PdfReportMetadata) || {};
   }
 
-  // A3 Landscape Resolution: 4200 x 2970 px (10 px/mm @ 254 DPI, crisp and zoomable)
+  // A3 Landscape Resolution: 4200 x 2970 px (10 px/mm @ 254 DPI, ultra-crisp & zoomable)
   const reportWidth = 4200;
   const reportHeight = 2970;
 
@@ -441,62 +442,56 @@ export async function exportFormworkPdfReport(
   ctx.fillStyle = '#FFFFFF';
   ctx.fillRect(0, 0, reportWidth, reportHeight);
 
-  // 1. Header Band
-  ctx.fillStyle = '#0F172A';
-  ctx.fillRect(0, 0, reportWidth, 180);
+  // Outer Drawing Sheet Margins & Frame (ขอบแบบพิมพ์ A3 ตามรูปตัวอย่าง)
+  const marginX = 60;
+  const marginY = 60;
+  const sheetW = reportWidth - marginX * 2; // 4080 px
+  const sheetH = reportHeight - marginY * 2; // 2850 px
 
-  ctx.fillStyle = '#FFFFFF';
-  ctx.font = 'bold 44px system-ui, -apple-system, sans-serif';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('รายงานสรุปแบบและการคำนวณไม้แบบสำเร็จรูป (Modular Formwork Report - A3)', 60, 65);
+  // Outer Solid Border
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(marginX, marginY, sheetW, sheetH);
 
-  ctx.font = '24px system-ui, -apple-system, sans-serif';
-  ctx.fillStyle = '#94A3B8';
-  ctx.fillText(
-    'ตารางสรุปจำนวนไม้แบบ 12 SKUs • แปลนการจัดวางความคมชัดระดับ Ultra-HD • และระยะไม้ตัดเสริมรวม (ไม้แบบหนา 5 ซม.)',
-    60,
-    125
-  );
+  // Layout Coordinates:
+  // 1. กรอบใหญ่ (Top-Left Main Plan Box): W = 3510, H = 2340 (Aspect Ratio = 1.500)
+  // 2. ด้านล่าง (Bottom Strip): W = 3510, H = 510
+  // 3. ด้านขวา (Right Column): W = 570, H = 2850
+  const planBoxX = marginX; // 60
+  const planBoxY = marginY; // 60
+  const planBoxW = 3510;
+  const planBoxH = 2340;
 
-  // Date and Metadata on Header Right
-  const nowStr = new Date().toLocaleString('th-TH');
-  ctx.textAlign = 'right';
-  ctx.font = 'bold 22px system-ui, -apple-system, sans-serif';
-  ctx.fillStyle = '#E2E8F0';
-  ctx.fillText(`วันที่ออกรายงาน: ${nowStr}`, reportWidth - 60, 65);
+  const rightColX = marginX + planBoxW; // 3570
+  const rightColY = marginY; // 60
+  const rightColW = sheetW - planBoxW; // 570
 
+  const bottomBoxX = marginX; // 60
+  const bottomBoxY = marginY + planBoxH; // 2400
+  const bottomBoxW = planBoxW; // 3510
+  const bottomBoxH = sheetH - planBoxH; // 510
+
+  // Draw Vertical Divider Line (separating Main & Bottom from Right Column)
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(rightColX, marginY);
+  ctx.lineTo(rightColX, marginY + sheetH);
+  ctx.stroke();
+
+  // Draw Horizontal Divider Line (separating Main Plan from Bottom Strip)
+  ctx.beginPath();
+  ctx.moveTo(marginX, bottomBoxY);
+  ctx.lineTo(rightColX, bottomBoxY);
+  ctx.stroke();
+
+  // =========================================================================
+  // 1. กรอบใหญ่ (TOP-LEFT MAIN PLAN BOX - 3510 x 2340 px)
+  // =========================================================================
   const safeScale = metadata.pixelsPerCm || metadata.scale || 1.2;
   const totalBeams = metadata.totalBeams ?? (metadata.beams ? metadata.beams.length : 0);
 
-  // 2. Left Column: Plan Layout & Color Legend (Width 2600, Height 2680)
-  const planBoxX = 60;
-  const planBoxY = 220;
-  const planBoxW = 2600;
-  const planBoxH = 2660;
-
-  // Plan Container Frame
-  ctx.fillStyle = '#F8FAFC';
-  ctx.strokeStyle = '#E2E8F0';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.roundRect(planBoxX, planBoxY, planBoxW, planBoxH, 16);
-  ctx.fill();
-  ctx.stroke();
-
-  // Render Plan Image using high-definition vector renderer
-  const planInnerX = planBoxX + 40;
-  const planInnerY = planBoxY + 80;
-  const planInnerW = 2520;
-  const planInnerH = 1782; // 2520 / 1782 = 1.41414... (Exact A3 paper aspect ratio)
-
-  ctx.fillStyle = '#FFFFFF';
-  ctx.strokeStyle = '#CBD5E1';
-  ctx.lineWidth = 2;
-  ctx.fillRect(planInnerX, planInnerY, planInnerW, planInnerH);
-  ctx.strokeRect(planInnerX, planInnerY, planInnerW, planInnerH);
-
-  const planResult = renderHighResPlanCanvas(planInnerW, planInnerH, {
+  const planResult = renderHighResPlanCanvas(planBoxW, planBoxH, {
     printBoundary: metadata.printBoundary,
     pdfImage: metadata.pdfImage,
     vectorLines: metadata.vectorLines,
@@ -509,277 +504,211 @@ export async function exportFormworkPdfReport(
   });
 
   if (planResult.canvas && planResult.canvas.width > 0) {
-    ctx.drawImage(planResult.canvas, planInnerX, planInnerY, planInnerW, planInnerH);
+    ctx.drawImage(planResult.canvas, planBoxX, planBoxY, planBoxW, planBoxH);
   } else if (canvas && canvas.width > 0) {
-    const scaleFactor = Math.min(planInnerW / canvas.width, planInnerH / canvas.height);
+    const scaleFactor = Math.min(planBoxW / canvas.width, planBoxH / canvas.height);
     const drawW = canvas.width * scaleFactor;
     const drawH = canvas.height * scaleFactor;
-    const drawX = planInnerX + (planInnerW - drawW) / 2;
-    const drawY = planInnerY + (planInnerH - drawH) / 2;
+    const drawX = planBoxX + (planBoxW - drawW) / 2;
+    const drawY = planBoxY + (planBoxH - drawH) / 2;
     ctx.drawImage(canvas, drawX, drawY, drawW, drawH);
   }
 
-  // Plan Title & Scale info
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillStyle = '#0F172A';
-  ctx.font = 'bold 28px system-ui, -apple-system, sans-serif';
-  ctx.fillText('แปลนการจัดวางไม้แบบ (Formwork Placement Layout)', planBoxX + 40, planBoxY + 30);
-
-  ctx.textAlign = 'right';
-  ctx.fillStyle = '#2563EB';
-  ctx.font = 'bold 22px system-ui, -apple-system, sans-serif';
-  ctx.fillText(
-    `ขอบเขตพิมพ์ A3: ${planResult.realWidthM.toFixed(2)} ม. × ${planResult.realHeightM.toFixed(2)} ม. (สเกลบนกระดาษ A3: ~1:${planResult.paperScale})`,
-    planBoxX + planBoxW - 40,
-    planBoxY + 34
-  );
-
-  // Header Subtitle right
-  ctx.font = '20px system-ui, -apple-system, sans-serif';
-  ctx.fillStyle = '#94A3B8';
-  ctx.fillText(
-    `จำนวนคาน: ${totalBeams} ช่วง  |  สเกลแปลน: ${safeScale.toFixed(2)} px/ซม.  |  สเกล A3: 1:${planResult.paperScale}`,
-    reportWidth - 60,
-    125
-  );
-
-  // Color Legend Card below Plan Image
-  const legendY = planInnerY + planInnerH + 30;
-  const legendH = 110;
-  ctx.fillStyle = '#FFFFFF';
-  ctx.strokeStyle = '#E2E8F0';
+  // Floating Title Badge (Top-Left inside plan box)
+  const titleBadgeX = planBoxX + 24;
+  const titleBadgeY = planBoxY + 24;
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.94)';
+  ctx.strokeStyle = '#CBD5E1';
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(planInnerX, legendY, planInnerW, legendH, 12);
+  ctx.roundRect(titleBadgeX, titleBadgeY, 580, 56, 10);
   ctx.fill();
   ctx.stroke();
 
-  const legends = [
-    { color: '#10B981', border: '#059669', label: '120 ซม. (เขียว)' },
-    { color: '#0EA5E9', border: '#0284C7', label: '100 ซม. (ฟ้า)' },
-    { color: '#F59E0B', border: '#D97706', label: '50 ซม. (ส้ม)' },
-    { color: '#F43F5E', border: '#E11D48', label: 'ฟรี (ไม้ตัดเสริม)' },
-    { color: '#1E293B', border: '#0F172A', label: 'แนวเส้นคาน (หนา 5 ซม.)' },
-  ];
-
-  ctx.font = 'bold 22px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#0F172A';
+  ctx.font = 'bold 26px system-ui, -apple-system, sans-serif';
+  ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  let legX = planInnerX + 40;
-  for (const leg of legends) {
-    ctx.fillStyle = leg.color;
-    ctx.strokeStyle = leg.border;
-    ctx.lineWidth = 2;
-    ctx.fillRect(legX, legendY + 38, 34, 34);
-    ctx.strokeRect(legX, legendY + 38, 34, 34);
+  ctx.fillText('แบบแปลนการจัดวางไม้แบบคาน (Formwork Plan)', titleBadgeX + 20, titleBadgeY + 28);
 
-    ctx.fillStyle = '#1E293B';
-    ctx.textAlign = 'left';
-    ctx.fillText(leg.label, legX + 46, legendY + 56);
-    legX += 480;
-  }
+  // Floating Scale Badge (Top-Right inside plan box)
+  const scaleText = `ขอบเขต: ${planResult.realWidthM.toFixed(2)} × ${planResult.realHeightM.toFixed(2)} ม.  |  มาตราส่วน A3: ~1:${planResult.paperScale}`;
+  ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
+  const scaleTextW = ctx.measureText(scaleText).width;
+  const scaleBadgeW = scaleTextW + 48;
+  const scaleBadgeX = planBoxX + planBoxW - scaleBadgeW - 24;
+  const scaleBadgeY = planBoxY + 24;
 
-  // Technical Note Card at bottom of plan column
-  const noteY = legendY + legendH + 20;
-  const noteH = planBoxY + planBoxH - noteY - 30;
-  ctx.fillStyle = '#EFF6FF';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.94)';
   ctx.strokeStyle = '#BFDBFE';
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(planInnerX, noteY, planInnerW, noteH, 12);
+  ctx.roundRect(scaleBadgeX, scaleBadgeY, scaleBadgeW, 56, 10);
   ctx.fill();
   ctx.stroke();
 
-  ctx.fillStyle = '#1E40AF';
-  ctx.font = 'bold 22px system-ui, -apple-system, sans-serif';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillText('📌 ข้อแนะนำการใช้งานและการติดตั้งไม้แบบหน้างาน (A3 Standard Specifications):', planInnerX + 28, noteY + 24);
+  ctx.fillStyle = '#1D4ED8';
+  ctx.textAlign = 'center';
+  ctx.fillText(scaleText, scaleBadgeX + scaleBadgeW / 2, scaleBadgeY + 28);
 
-  ctx.fillStyle = '#1E3A8A';
-  ctx.font = '20px system-ui, -apple-system, sans-serif';
-  ctx.fillText(
-    '• ไม้แบบทุกชิ้นเป็นแบบสำเร็จรูปหนา 5 ซม. ติดตั้งเกาะตามแนวขอบแปลนคานที่กำหนดไว้ในรูปด้านบนอย่างแม่นยำ',
-    planInnerX + 28,
-    noteY + 70
-  );
-  ctx.fillText(
-    '• ช่วงคานที่ลงท้ายด้วยระยะฟรี (สีแดง) ให้ใช้ไม้ตัดเสริมหน้างานประกบเข้ากับจุดต่อตามขนาดที่ระบุในตารางด้านขวา',
-    planInnerX + 28,
-    noteY + 110
-  );
-  ctx.fillText(
-    `• สเกลพิมพ์บนกระดาษ A3 แนวนอน (420 × 297 มม.) เท่ากับมาตราส่วนประมาณ 1:${planResult.paperScale} วัดระยะจากขอบเขตพิมพ์ได้โดยตรง`,
-    planInnerX + 28,
-    noteY + 150
-  );
+  // =========================================================================
+  // 2. ด้านล่าง (BOTTOM DETAILS STRIP - 3510 x 510 px)
+  // แบ่งเป็น 2 ส่วน: ตาราง 12 SKUs Matrix (ซ้าย) + รายการไม้ตัดเสริมหน้างาน & ข้อกำหนด (ขวา)
+  // =========================================================================
+  const bottomInnerPad = 20;
 
-  // 3. Right Column: Summary Cards, 12 SKUs Matrix & Free-Cut Infill (Width 1440)
-  const rightX = 2700;
-  const rightY = 220;
-  const rightW = reportWidth - rightX - 60;
-
-  // KPI Highlight Cards
-  const kpiCardH = 150;
-  const kpiItems = [
-    {
-      title: 'รวมไม้แบบสำเร็จรูปสำหรับเช่า',
-      val: `${summary.totalStandardPanels} แผ่น`,
-      sub: `พื้นที่เช่ารวม: ${summary.totalStandardAreaSqm.toFixed(2)} ตร.ม. (หนา 5 ซม.)`,
-      bg: '#F0FDF4',
-      border: '#86EFAC',
-      text: '#166534',
-    },
-    {
-      title: 'ระยะไม้ตัดเสริมรวม (Free Cut Infill)',
-      val: `${(summary.totalFreeLengthCm / 100).toFixed(2)} เมตร`,
-      sub: `ระยะรวม ${summary.totalFreeLengthCm} ซม. (${summary.freeItems.length} จุด)`,
-      bg: '#FFF1F2',
-      border: '#FECDD3',
-      text: '#9F1239',
-    },
-  ];
-
-  for (let k = 0; k < kpiItems.length; k++) {
-    const item = kpiItems[k];
-    const cy = rightY + k * (kpiCardH + 20);
-    ctx.fillStyle = item.bg;
-    ctx.strokeStyle = item.border;
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.roundRect(rightX, cy, rightW, kpiCardH, 14);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = item.text;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
-    ctx.fillText(item.title, rightX + 32, cy + 22);
-
-    ctx.font = 'bold 44px system-ui, -apple-system, sans-serif';
-    ctx.fillText(item.val, rightX + 32, cy + 58);
-
-    ctx.font = '20px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = '#475569';
-    ctx.fillText(item.sub, rightX + 32, cy + 112);
-  }
-
-  // 12 SKUs Matrix Table
-  const tableY = rightY + 2 * (kpiCardH + 20) + 10;
-  const tableH = 880;
+  // 2A. ตารางสรุป 12 SKUs สำหรับการสั่งเช่า (Zone ซ้าย, กว้าง 2180 px)
+  const matrixCardX = bottomBoxX + bottomInnerPad;
+  const matrixCardY = bottomBoxY + bottomInnerPad;
+  const matrixCardW = 2180;
+  const matrixCardH = bottomBoxH - bottomInnerPad * 2;
 
   ctx.fillStyle = '#FFFFFF';
-  ctx.strokeStyle = '#E2E8F0';
-  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = '#CBD5E1';
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(rightX, tableY, rightW, tableH, 14);
+  ctx.roundRect(matrixCardX, matrixCardY, matrixCardW, matrixCardH, 12);
   ctx.fill();
   ctx.stroke();
 
+  // Matrix Card Header
   ctx.fillStyle = '#0F172A';
   ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
   ctx.font = 'bold 28px system-ui, -apple-system, sans-serif';
-  ctx.fillText('ตารางแจกแจงไม้แบบ 12 SKUs สำหรับการสั่งเช่า', rightX + 32, tableY + 28);
+  ctx.fillText('ตารางสรุปจำนวนไม้แบบ 12 SKUs สำหรับการสั่งเช่า', matrixCardX + 24, matrixCardY + 18);
 
-  // Table Grid setup
-  const tblStartX = rightX + 30;
-  const tblStartY = tableY + 80;
-  const tblW = rightW - 60;
-  const colW = tblW / 6;
-  const rowH = 120;
+  ctx.font = '20px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#64748B';
+  ctx.fillText('ความหนาไม้แบบมาตรฐาน 5 ซม. ทุกขนาด (Lengths 120, 100, 50 ซม. × Heights 40, 50, 60, 70 ซม.)', matrixCardX + 660, matrixCardY + 22);
 
-  const cols = ['ความยาว', 'สูง 40', 'สูง 50', 'สูง 60', 'สูง 70', 'รวม (แผ่น)'];
+  // 12 SKUs Table
+  const tblX = matrixCardX + 20;
+  const tblY = matrixCardY + 62;
+  const tblW = matrixCardW - 40; // 2140 px
+  const colW0 = 360;
+  const colWHeight = 350; // 4 columns = 1400 px
+  const colWTotal = tblW - colW0 - colWHeight * 4; // 380 px
 
-  // Table Header
+  const cols = [
+    { label: 'ความยาวมาตรฐาน', w: colW0 },
+    { label: 'สูง 40 ซม.', w: colWHeight },
+    { label: 'สูง 50 ซม.', w: colWHeight },
+    { label: 'สูง 60 ซม.', w: colWHeight },
+    { label: 'สูง 70 ซม.', w: colWHeight },
+    { label: 'รวม (แผ่น)', w: colWTotal },
+  ];
+
+  // Table Header Row (Height: 58 px)
+  const headerH = 58;
   ctx.fillStyle = '#1E293B';
-  ctx.fillRect(tblStartX, tblStartY, tblW, 70);
+  ctx.beginPath();
+  ctx.roundRect(tblX, tblY, tblW, headerH, [8, 8, 0, 0]);
+  ctx.fill();
+
   ctx.fillStyle = '#FFFFFF';
   ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  cols.forEach((c, idx) => {
-    ctx.fillText(c, tblStartX + idx * colW + colW / 2, tblStartY + 35);
-  });
 
-  // Table Rows (120, 100, 50)
+  let curColX = tblX;
+  for (const c of cols) {
+    ctx.fillText(c.label, curColX + c.w / 2, tblY + headerH / 2);
+    curColX += c.w;
+  }
+
+  // Table Body Rows (120, 100, 50 cm) - Row Height: 80 px
+  const rowH = 80;
   STANDARD_LENGTHS.forEach((len, rIdx) => {
-    const ry = tblStartY + 70 + rIdx * rowH;
+    const ry = tblY + headerH + rIdx * rowH;
     ctx.fillStyle = rIdx % 2 === 0 ? '#FFFFFF' : '#F8FAFC';
-    ctx.fillRect(tblStartX, ry, tblW, rowH);
+    ctx.fillRect(tblX, ry, tblW, rowH);
 
     ctx.strokeStyle = '#E2E8F0';
     ctx.lineWidth = 1.5;
-    ctx.strokeRect(tblStartX, ry, tblW, rowH);
+    ctx.strokeRect(tblX, ry, tblW, rowH);
 
-    // Row Label
+    // Row Label (Length)
     ctx.fillStyle = '#0F172A';
-    ctx.font = 'bold 26px system-ui, -apple-system, sans-serif';
+    ctx.font = 'bold 30px system-ui, -apple-system, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`${len} ซม.`, tblStartX + colW / 2, ry + rowH / 2);
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`${len} ซม.`, tblX + colW0 / 2, ry + rowH / 2);
 
-    // Columns 40, 50, 60, 70
+    // Height Columns (40, 50, 60, 70)
     FORMWORK_HEIGHTS.forEach((h, hIdx) => {
       const count = summary.matrix[len][h];
-      ctx.font = count > 0 ? 'bold 28px system-ui, sans-serif' : '22px system-ui, sans-serif';
-      ctx.fillStyle = count > 0 ? '#2563EB' : '#94A3B8';
-      ctx.fillText(
-        count > 0 ? `${count}` : '-',
-        tblStartX + (hIdx + 1) * colW + colW / 2,
-        ry + rowH / 2
-      );
+      const cellX = tblX + colW0 + hIdx * colWHeight;
+
+      // Small vertical grid line
+      ctx.strokeStyle = '#E2E8F0';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cellX, ry);
+      ctx.lineTo(cellX, ry + rowH);
+      ctx.stroke();
+
+      ctx.font = count > 0 ? 'bold 36px system-ui, sans-serif' : '24px system-ui, sans-serif';
+      ctx.fillStyle = count > 0 ? '#1D4ED8' : '#94A3B8';
+      ctx.fillText(count > 0 ? `${count}` : '-', cellX + colWHeight / 2, ry + rowH / 2);
     });
 
-    // Row Total
-    ctx.font = 'bold 28px system-ui, -apple-system, sans-serif';
+    // Row Total Column
+    const totalColX = tblX + colW0 + 4 * colWHeight;
+    ctx.strokeStyle = '#E2E8F0';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(totalColX, ry);
+    ctx.lineTo(totalColX, ry + rowH);
+    ctx.stroke();
+
+    ctx.font = 'bold 36px system-ui, -apple-system, sans-serif';
     ctx.fillStyle = '#0F172A';
-    ctx.fillText(
-      `${summary.totalsByLength[len]}`,
-      tblStartX + 5 * colW + colW / 2,
-      ry + rowH / 2
-    );
+    ctx.fillText(`${summary.totalsByLength[len]}`, totalColX + colWTotal / 2, ry + rowH / 2);
   });
 
-  // Table Bottom Total Row
-  const totalRy = tblStartY + 70 + STANDARD_LENGTHS.length * rowH;
-  const totalRowH = 80;
+  // Table Bottom Total Row (รวมตามความสูง - Height: 88 px)
+  const totalRy = tblY + headerH + STANDARD_LENGTHS.length * rowH;
+  const totalRowH = 88;
   ctx.fillStyle = '#EFF6FF';
-  ctx.fillRect(tblStartX, totalRy, tblW, totalRowH);
+  ctx.beginPath();
+  ctx.roundRect(tblX, totalRy, tblW, totalRowH, [0, 0, 8, 8]);
+  ctx.fill();
+
   ctx.strokeStyle = '#93C5FD';
   ctx.lineWidth = 2;
-  ctx.strokeRect(tblStartX, totalRy, tblW, totalRowH);
+  ctx.strokeRect(tblX, totalRy, tblW, totalRowH);
 
   ctx.fillStyle = '#1E3A8A';
-  ctx.font = 'bold 26px system-ui, -apple-system, sans-serif';
+  ctx.font = 'bold 28px system-ui, -apple-system, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('รวมตามความสูง', tblStartX + colW / 2, totalRy + totalRowH / 2);
+  ctx.textBaseline = 'middle';
+  ctx.fillText('รวมตามความสูง', tblX + colW0 / 2, totalRy + totalRowH / 2);
 
   FORMWORK_HEIGHTS.forEach((h, hIdx) => {
-    ctx.fillText(
-      `${summary.totalsByHeight[h]}`,
-      tblStartX + (hIdx + 1) * colW + colW / 2,
-      totalRy + totalRowH / 2
-    );
+    const cellX = tblX + colW0 + hIdx * colWHeight;
+    ctx.fillStyle = '#1E40AF';
+    ctx.font = 'bold 36px system-ui, -apple-system, sans-serif';
+    ctx.fillText(`${summary.totalsByHeight[h]}`, cellX + colWHeight / 2, totalRy + totalRowH / 2);
   });
 
   // Grand Total Cell
+  const grandTotalX = tblX + colW0 + 4 * colWHeight;
   ctx.fillStyle = '#1D4ED8';
-  ctx.font = 'bold 32px system-ui, -apple-system, sans-serif';
-  ctx.fillText(
-    `${summary.totalStandardPanels}`,
-    tblStartX + 5 * colW + colW / 2,
-    totalRy + totalRowH / 2
-  );
+  ctx.font = 'bold 44px system-ui, -apple-system, sans-serif';
+  ctx.fillText(`${summary.totalStandardPanels}`, grandTotalX + colWTotal / 2, totalRy + totalRowH / 2);
 
-  // Free-Cut Infill Section Card (Bottom Right)
-  const freeCardY = tableY + tableH + 20;
-  const freeCardH = planBoxY + planBoxH - freeCardY;
+  // 2B. รายการไม้ตัดเสริมหน้างาน & ข้อกำหนด (Zone ขวา, กว้าง 1260 px)
+  const freeCardX = matrixCardX + matrixCardW + 20;
+  const freeCardY = matrixCardY;
+  const freeCardW = bottomBoxW - (matrixCardW + bottomInnerPad * 2 + 20);
+  const freeCardH = matrixCardH;
 
-  ctx.fillStyle = '#FFFFFF';
-  ctx.strokeStyle = '#E2E8F0';
-  ctx.lineWidth = 2.5;
+  ctx.fillStyle = '#F8FAFC';
+  ctx.strokeStyle = '#CBD5E1';
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(rightX, freeCardY, rightW, freeCardH, 14);
+  ctx.roundRect(freeCardX, freeCardY, freeCardW, freeCardH, 12);
   ctx.fill();
   ctx.stroke();
 
@@ -787,47 +716,308 @@ export async function exportFormworkPdfReport(
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.font = 'bold 28px system-ui, -apple-system, sans-serif';
-  ctx.fillText('รายการระยะไม้ตัดเสริมหน้างาน (Free-Cut Infill)', rightX + 32, freeCardY + 28);
+  ctx.fillText('รายการระยะไม้ตัดเสริมหน้างาน (Free-Cut Infill)', freeCardX + 24, freeCardY + 18);
 
+  ctx.font = '20px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#64748B';
+  ctx.fillText('เศษความยาวไม้ที่ต้องตัดเสริมประกบเข้ากับจุดต่อคาน (ความหนา 5 ซม.)', freeCardX + 24, freeCardY + 54);
+
+  // Free Items List
   if (summary.freeItems.length === 0) {
-    ctx.font = '24px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = '#10B981';
-    ctx.fillText('✓ ไม้แบบลงตัวพอดีทุกช่วง ไม่มีเศษไม้ตัดเสริม', rightX + 32, freeCardY + 90);
+    const greenPillY = freeCardY + 110;
+    ctx.fillStyle = '#DCFCE7';
+    ctx.strokeStyle = '#86EFAC';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(freeCardX + 24, greenPillY, freeCardW - 48, 80, 10);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#15803D';
+    ctx.font = 'bold 26px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('✓ ไม้แบบลงตัวพอดีทุกช่วง ไม่มีเศษไม้ตัดเสริมหน้างาน', freeCardX + freeCardW / 2, greenPillY + 40);
   } else {
-    ctx.font = '22px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = '#475569';
-    let lineY = freeCardY + 84;
-    const maxItems = Math.min(summary.freeItems.length, 12);
+    ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = '#9F1239';
+    let lineY = freeCardY + 95;
+    const maxItems = Math.min(summary.freeItems.length, 6);
     for (let i = 0; i < maxItems; i++) {
       const it = summary.freeItems[i];
       const sideText = it.side === 'left' ? 'ซ้าย' : 'ขวา';
       ctx.fillText(
         `• คาน ${it.beamName} (${sideText}): กว้าง ${it.lengthCm} ซม.  ×  สูง ${it.heightCm} ซม.  ×  หนา ${it.thicknessCm} ซม.`,
-        rightX + 32,
+        freeCardX + 24,
         lineY
       );
-      lineY += 42;
+      lineY += 38;
     }
-    if (summary.freeItems.length > 12) {
+    if (summary.freeItems.length > 6) {
       ctx.fillStyle = '#64748B';
+      ctx.font = '20px system-ui, -apple-system, sans-serif';
       ctx.fillText(
-        `... และอีก ${summary.freeItems.length - 12} รายการ (สามารถดูรายการทั้งหมดได้ในไฟล์ Excel CSV)`,
-        rightX + 32,
+        `... และอีก ${summary.freeItems.length - 6} รายการ (ดูรายละเอียดทั้งหมดในไฟล์ Excel CSV)`,
+        freeCardX + 24,
         lineY
       );
     }
   }
 
-  // Footer Note
-  ctx.textAlign = 'right';
-  ctx.textBaseline = 'bottom';
-  ctx.font = '20px system-ui, -apple-system, sans-serif';
+  // Specifications & Notes at bottom of free card
+  const specY = freeCardY + freeCardH - 95;
+  ctx.fillStyle = '#EFF6FF';
+  ctx.strokeStyle = '#BFDBFE';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.roundRect(freeCardX + 20, specY, freeCardW - 40, 78, 8);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#1E40AF';
+  ctx.font = 'bold 20px system-ui, -apple-system, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('📌 ข้อกำหนด: ไม้แบบทุกชิ้นเป็นแบบสำเร็จรูปหนา 5 ซม. เกาะตามแนวขอบแปลนคาน', freeCardX + 34, specY + 14);
+
+  ctx.fillStyle = '#1E3A8A';
+  ctx.font = '19px system-ui, -apple-system, sans-serif';
+  ctx.fillText(`• สเกลพิมพ์บนกระดาษ A3 แนวนอน (420 × 297 มม.) เท่ากับมาตราส่วนประมาณ 1:${planResult.paperScale}`, freeCardX + 34, specY + 44);
+
+  // =========================================================================
+  // 3. ด้านขวา (RIGHT COLUMN / TITLE BLOCK - 570 x 2850 px)
+  // Stacked architectural Title Block cards with large, clear, bold fonts
+  // =========================================================================
+  const rightPad = 22;
+  const colCardX = rightColX + rightPad;
+  const colCardW = rightColW - rightPad * 2; // 526 px
+
+  // 3A. Card 1: Logo & Sheet Title (Y: 80, H: 270)
+  const c1Y = rightColY + 20;
+  const c1H = 270;
+  ctx.fillStyle = '#0F172A';
+  ctx.beginPath();
+  ctx.roundRect(colCardX, c1Y, colCardW, c1H, 12);
+  ctx.fill();
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = 'bold 28px system-ui, -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('MODULAR FORMWORK CAD', colCardX + colCardW / 2, c1Y + 26);
+
+  ctx.font = '19px system-ui, -apple-system, sans-serif';
   ctx.fillStyle = '#94A3B8';
-  ctx.fillText(
-    'เอกสารทางการออกโดย: Modular Formwork CAD Calculator (A3 Landscape) • ห้ามแก้ไขตัวเลขโดยพลการ',
-    reportWidth - 60,
-    reportHeight - 20
-  );
+  ctx.fillText('ระบบคำนวณและถอดแบบไม้แบบสำเร็จรูป', colCardX + colCardW / 2, c1Y + 68);
+
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(colCardX + 30, c1Y + 110);
+  ctx.lineTo(colCardX + colCardW - 30, c1Y + 110);
+  ctx.stroke();
+
+  ctx.fillStyle = '#38BDF8';
+  ctx.font = 'bold 32px system-ui, -apple-system, sans-serif';
+  ctx.fillText('แบบแปลนติดตั้งไม้แบบคาน', colCardX + colCardW / 2, c1Y + 140);
+
+  ctx.font = '18px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#CBD5E1';
+  ctx.fillText('FORMWORK PLACEMENT PLAN (A3)', colCardX + colCardW / 2, c1Y + 195);
+
+  // 3B. Card 2: ข้อมูลโครงการและแบบ (Y: 375, H: 440)
+  const c2Y = c1Y + c1H + 20;
+  const c2H = 440;
+  ctx.fillStyle = '#FFFFFF';
+  ctx.strokeStyle = '#CBD5E1';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(colCardX, c2Y, colCardW, c2H, 12);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#0F172A';
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 26px system-ui, -apple-system, sans-serif';
+  ctx.fillText('ข้อมูลแบบและโครงการ', colCardX + 24, c2Y + 20);
+
+  const projRows = [
+    { label: 'โครงการ:', val: metadata.projectName || 'โครงการก่อสร้างอาคาร คสล.' },
+    { label: 'วันที่ออกรายงาน:', val: new Date().toLocaleDateString('th-TH') },
+    { label: 'มาตราส่วน A3:', val: `~1:${planResult.paperScale}`, isBoldBlue: true },
+    { label: 'ขอบเขตพิมพ์:', val: `${planResult.realWidthM.toFixed(2)} × ${planResult.realHeightM.toFixed(2)} ม.` },
+    { label: 'สเกลภาพแปลน:', val: `${safeScale.toFixed(2)} px/ซม.` },
+    { label: 'จำนวนคานรวม:', val: `${totalBeams} ช่วงคาน` },
+  ];
+
+  let pRowY = c2Y + 70;
+  for (const r of projRows) {
+    ctx.fillStyle = '#475569';
+    ctx.font = '22px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(r.label, colCardX + 24, pRowY);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = r.isBoldBlue ? '#2563EB' : '#0F172A';
+    ctx.font = r.isBoldBlue
+      ? 'bold 28px system-ui, -apple-system, sans-serif'
+      : 'bold 24px system-ui, -apple-system, sans-serif';
+    ctx.fillText(r.val, colCardX + colCardW - 24, pRowY);
+
+    pRowY += 58;
+  }
+
+  // 3C. Card 3: สรุปยอดรวมไม้แบบเช่า (KPI 1 - Y: 835, H: 340)
+  const c3Y = c2Y + c2H + 20;
+  const c3H = 340;
+  ctx.fillStyle = '#F0FDF4';
+  ctx.strokeStyle = '#86EFAC';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.roundRect(colCardX, c3Y, colCardW, c3H, 12);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#166534';
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
+  ctx.fillText('รวมไม้แบบสำเร็จรูปสำหรับเช่า', colCardX + 24, c3Y + 22);
+
+  ctx.font = 'bold 64px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#15803D';
+  ctx.fillText(`${summary.totalStandardPanels} แผ่น`, colCardX + 24, c3Y + 70);
+
+  ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#166534';
+  ctx.fillText(`พื้นที่เช่ารวม: ${summary.totalStandardAreaSqm.toFixed(2)} ตร.ม.`, colCardX + 24, c3Y + 190);
+
+  ctx.font = '20px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#15803D';
+  ctx.fillText('ความหนามาตรฐาน: 5.0 ซม. ทุกแผ่น', colCardX + 24, c3Y + 240);
+
+  // 3D. Card 4: สรุปไม้ตัดเสริมหน้างาน (KPI 2 - Y: 1195, H: 340)
+  const c4Y = c3Y + c3H + 20;
+  const c4H = 340;
+  ctx.fillStyle = '#FFF1F2';
+  ctx.strokeStyle = '#FECDD3';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.roundRect(colCardX, c4Y, colCardW, c4H, 12);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#9F1239';
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
+  ctx.fillText('ระยะไม้ตัดเสริมรวม (Free-Cut)', colCardX + 24, c4Y + 22);
+
+  ctx.font = 'bold 64px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#BE123C';
+  ctx.fillText(`${(summary.totalFreeLengthCm / 100).toFixed(2)} ม.`, colCardX + 24, c4Y + 70);
+
+  ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#9F1239';
+  ctx.fillText(`รวมระยะ ${summary.totalFreeLengthCm} ซม. (${summary.freeItems.length} จุดต่อ)`, colCardX + 24, c4Y + 190);
+
+  ctx.font = '20px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#BE123C';
+  ctx.fillText('ตัดไม้เสริมประกบตามขนาดจริงหน้างาน', colCardX + 24, c4Y + 240);
+
+  // 3E. Card 5: สัญลักษณ์และสีไม้แบบ (Y: 1555, H: 580)
+  const c5Y = c4Y + c4H + 20;
+  const c5H = 580;
+  ctx.fillStyle = '#FFFFFF';
+  ctx.strokeStyle = '#CBD5E1';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(colCardX, c5Y, colCardW, c5H, 12);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#0F172A';
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 26px system-ui, -apple-system, sans-serif';
+  ctx.fillText('สัญลักษณ์สีไม้แบบ (Panel SKUs)', colCardX + 24, c5Y + 22);
+
+  const legendItems = [
+    { color: '#10B981', border: '#059669', label: 'แผ่น 120 ซม. (สีเขียว)' },
+    { color: '#0EA5E9', border: '#0284C7', label: 'แผ่น 100 ซม. (สีฟ้า)' },
+    { color: '#F59E0B', border: '#D97706', label: 'แผ่น 50 ซม. (สีส้ม)' },
+    { color: '#F43F5E', border: '#E11D48', label: 'ฟรี / ไม้ตัดเสริม (สีแดง)' },
+    { color: '#1E293B', border: '#0F172A', label: 'แนวเส้นขอบคาน (หนา 5 ซม.)' },
+    { color: '#2563EB', border: '#1D4ED8', label: 'จุดตัดกริดคาน (Grid Nodes)' },
+  ];
+
+  let legItemY = c5Y + 80;
+  for (const it of legendItems) {
+    ctx.fillStyle = it.color;
+    ctx.strokeStyle = it.border;
+    ctx.lineWidth = 2.5;
+    ctx.fillRect(colCardX + 24, legItemY, 44, 44);
+    ctx.strokeRect(colCardX + 24, legItemY, 44, 44);
+
+    ctx.fillStyle = '#0F172A';
+    ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(it.label, colCardX + 86, legItemY + 22);
+
+    legItemY += 76;
+  }
+
+  // 3F. Card 6: ช่องลงนามตรวจแบบและตราประทับ (Y: 2155, H: 695)
+  const c6Y = c5Y + c5H + 20;
+  const c6H = sheetH - (c6Y - marginY) - 20;
+  ctx.fillStyle = '#F8FAFC';
+  ctx.strokeStyle = '#94A3B8';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(colCardX, c6Y, colCardW, c6H, 12);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#0F172A';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.font = 'bold 26px system-ui, -apple-system, sans-serif';
+  ctx.fillText('การตรวจแบบและการอนุมัติ', colCardX + 24, c6Y + 20);
+
+  ctx.font = 'bold 22px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#334155';
+  ctx.fillText('ผู้จัดทำแบบ (Drawn By):', colCardX + 24, c6Y + 72);
+
+  ctx.font = '22px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#64748B';
+  ctx.fillText('ลายมือชื่อ: ....................................................', colCardX + 24, c6Y + 112);
+  ctx.fillText('วันที่: .......... / .......... / ..........', colCardX + 24, c6Y + 152);
+
+  ctx.font = 'bold 22px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#334155';
+  ctx.fillText('วิศวกรผู้ตรวจแบบ (Checked By):', colCardX + 24, c6Y + 212);
+
+  ctx.font = '22px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#64748B';
+  ctx.fillText('ลายมือชื่อ: ....................................................', colCardX + 24, c6Y + 252);
+  ctx.fillText('วันที่: .......... / .......... / ..........', colCardX + 24, c6Y + 292);
+
+  // Bottom Stamp in Card 6
+  const stampY = c6Y + c6H - 120;
+  ctx.fillStyle = '#E2E8F0';
+  ctx.fillRect(colCardX + 20, stampY, colCardW - 40, 1.5);
+
+  ctx.fillStyle = '#0F172A';
+  ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('A3 LANDSCAPE (420 × 297 mm)', colCardX + colCardW / 2, stampY + 18);
+
+  ctx.font = '18px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#64748B';
+  ctx.fillText('ULTRA-HD VECTOR RESOLUTION (254 DPI)', colCardX + colCardW / 2, stampY + 54);
+
+  ctx.font = '16px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#94A3B8';
+  ctx.fillText('MODULAR FORMWORK CAD CALCULATOR', colCardX + colCardW / 2, stampY + 84);
 
   // Generate A3 Landscape PDF via jsPDF
   const pdf = new jsPDF({
