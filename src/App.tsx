@@ -33,6 +33,7 @@ import {
 } from './engine/beamDetector';
 import {
   downloadCsvFile,
+  drawHeightFilterBadge,
   exportCanvasAsPng,
   exportFormworkPdfReport,
   renderHighResPlanCanvas,
@@ -730,6 +731,7 @@ export const App: React.FC = () => {
         gridIntersections,
         beams,
         panels: visiblePanels,
+        visibleHeights,
         pixelsPerCm,
       });
     } catch (err) {
@@ -761,12 +763,26 @@ export const App: React.FC = () => {
         gridIntersections,
         beams,
         panels: visiblePanels,
+        visibleHeights,
+        drawHeightFilterOverlay: true,
         pixelsPerCm,
         fallbackCanvas: canvasRef.current,
       });
       exportCanvasAsPng(planRes.canvas, 'formwork-beam-layout-A3.png');
-    } else {
-      exportCanvasAsPng(canvasRef.current, 'formwork-beam-layout.png');
+    } else if (canvasRef.current) {
+      const src = canvasRef.current;
+      const outCanvas = document.createElement('canvas');
+      outCanvas.width = src.width;
+      outCanvas.height = src.height;
+      const outCtx = outCanvas.getContext('2d');
+      if (outCtx) {
+        outCtx.drawImage(src, 0, 0);
+        const uiScale = Math.max(0.5, Math.min(0.9, src.width / 2200));
+        drawHeightFilterBadge(outCtx, 16, 16, visibleHeights, uiScale);
+        exportCanvasAsPng(outCanvas, 'formwork-beam-layout.png');
+      } else {
+        exportCanvasAsPng(src, 'formwork-beam-layout.png');
+      }
     }
   };
 

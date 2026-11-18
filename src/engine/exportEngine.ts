@@ -2,6 +2,7 @@ import jsPDF from 'jspdf';
 import {
   FORMWORK_HEIGHTS,
   FORMWORK_THICKNESS_CM,
+  FormworkHeight,
   FormworkProjectData,
   RentalSummaryReport,
   STANDARD_LENGTHS,
@@ -190,8 +191,118 @@ export interface HighResPlanOptions {
   gridIntersections?: GridIntersection[];
   beams?: BeamElement[];
   panels?: PlacedPanel[];
+  visibleHeights?: Record<FormworkHeight, boolean>;
+  drawHeightFilterOverlay?: boolean;
   pixelsPerCm: number;
   fallbackCanvas?: HTMLCanvasElement | null;
+}
+
+/**
+ * Draws the formwork height visibility checkbox bar onto a plan canvas (for PDF & PNG exports)
+ * so readers can immediately see which panel heights (40, 50, 60, 70 cm) are displayed.
+ */
+export function drawHeightFilterBadge(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  visibleHeights?: Record<FormworkHeight, boolean>,
+  uiScale = 1
+): void {
+  const s = uiScale;
+  const padX = 16 * s;
+  const badgeH = 50 * s;
+  const labelW = 148 * s;
+  const pillW = 108 * s;
+  const pillH = 34 * s;
+  const pillGap = 10 * s;
+  const totalW =
+    padX * 2 +
+    labelW +
+    FORMWORK_HEIGHTS.length * pillW +
+    (FORMWORK_HEIGHTS.length - 1) * pillGap;
+
+  ctx.save();
+
+  // Outer card background
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.94)';
+  ctx.strokeStyle = '#CBD5E1';
+  ctx.lineWidth = Math.max(1, 2 * s);
+  ctx.beginPath();
+  if (typeof ctx.roundRect === 'function') {
+    ctx.roundRect(x, y, totalW, badgeH, 10 * s);
+  } else {
+    ctx.rect(x, y, totalW, badgeH);
+  }
+  ctx.fill();
+  ctx.stroke();
+
+  // Left title label
+  ctx.fillStyle = '#475569';
+  ctx.font = `bold ${Math.round(21 * s)}px system-ui, -apple-system, sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('แสดงความสูง:', x + padX, y + badgeH / 2);
+
+  // Height checkbox pills
+  let curX = x + padX + labelW;
+  const pillY = y + (badgeH - pillH) / 2;
+
+  for (const h of FORMWORK_HEIGHTS) {
+    const isChecked = !visibleHeights || visibleHeights[h] !== false;
+
+    ctx.fillStyle = isChecked ? '#EFF6FF' : '#F8FAFC';
+    ctx.strokeStyle = isChecked ? '#93C5FD' : '#E2E8F0';
+    ctx.lineWidth = Math.max(1, 1.5 * s);
+    ctx.beginPath();
+    if (typeof ctx.roundRect === 'function') {
+      ctx.roundRect(curX, pillY, pillW, pillH, 6 * s);
+    } else {
+      ctx.rect(curX, pillY, pillW, pillH);
+    }
+    ctx.fill();
+    ctx.stroke();
+
+    // Checkbox box
+    const boxSize = 18 * s;
+    const boxX = curX + 10 * s;
+    const boxY = pillY + (pillH - boxSize) / 2;
+
+    ctx.fillStyle = isChecked ? '#2563EB' : '#FFFFFF';
+    ctx.strokeStyle = isChecked ? '#2563EB' : '#94A3B8';
+    ctx.lineWidth = Math.max(1, 1.5 * s);
+    ctx.beginPath();
+    if (typeof ctx.roundRect === 'function') {
+      ctx.roundRect(boxX, boxY, boxSize, boxSize, 4 * s);
+    } else {
+      ctx.rect(boxX, boxY, boxSize, boxSize);
+    }
+    ctx.fill();
+    ctx.stroke();
+
+    // Checkmark inside box when checked
+    if (isChecked) {
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = Math.max(1.5, 2.5 * s);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(boxX + boxSize * 0.22, boxY + boxSize * 0.52);
+      ctx.lineTo(boxX + boxSize * 0.42, boxY + boxSize * 0.74);
+      ctx.lineTo(boxX + boxSize * 0.78, boxY + boxSize * 0.28);
+      ctx.stroke();
+    }
+
+    // Height text
+    ctx.fillStyle = isChecked ? '#0F172A' : '#94A3B8';
+    ctx.font = `${isChecked ? 'bold ' : ''}${Math.round(20 * s)}px system-ui, -apple-system, sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`${h} ซม.`, boxX + boxSize + 8 * s, pillY + pillH / 2);
+
+    curX += pillW + pillGap;
+  }
+
+  ctx.restore();
 }
 
 /**
@@ -447,6 +558,10 @@ export function renderHighResPlanCanvas(
 
   ctx.restore();
 
+  if (options.drawHeightFilterOverlay && ctx) {
+    drawHeightFilterBadge(ctx, 24, 24, options.visibleHeights, 1);
+  }
+
   return { canvas, realWidthM, realHeightM, paperScale };
 }
 
@@ -465,6 +580,7 @@ export interface PdfReportMetadata {
   gridIntersections?: GridIntersection[];
   beams?: BeamElement[];
   panels?: PlacedPanel[];
+  visibleHeights?: Record<FormworkHeight, boolean>;
   pixelsPerCm?: number;
 }
 
@@ -606,6 +722,9 @@ export async function exportFormworkPdfReport(
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillText('แบบแปลนการจัดวางไม้แบบคาน (Formwork Plan)', titleBadgeX + 20, titleBadgeY + 28);
+
+  // Floating Height Visibility Checkbox Badge (Directly below Title Badge inside plan box)
+  drawHeightFilterBadge(ctx, titleBadgeX, titleBadgeY + 68, metadata.visibleHeights, 1);
 
   // Floating Scale Badge (Top-Right inside plan box)
   const scaleText = `ขอบเขต: ${planResult.realWidthM.toFixed(2)} × ${planResult.realHeightM.toFixed(2)} ม.  |  มาตราส่วน A3: ~1:${planResult.paperScale}`;

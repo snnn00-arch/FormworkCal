@@ -323,6 +323,12 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
       expect(exportPdfSpy).toHaveBeenCalledTimes(1);
       const pdfMetadata = exportPdfSpy.mock.calls[0][2] as exportEngine.PdfReportMetadata;
       expect(pdfMetadata.panels).toHaveLength(0);
+      expect(pdfMetadata.visibleHeights).toEqual({
+        40: true,
+        50: false,
+        60: true,
+        70: true,
+      });
 
       // Click "ทั้งหมด" to re-enable all heights
       fillTextCalls.length = 0;

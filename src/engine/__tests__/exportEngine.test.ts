@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { computeRentalSummary, optimizeSingleSidePanels } from '../formworkOptimizer';
 import {
+  drawHeightFilterBadge,
   generateRentalSummaryCsv,
   loadProjectFile,
   saveProjectFile,
@@ -146,5 +147,48 @@ describe('exportEngine', () => {
     // Verify it crops around the beam (around 600px width + padding) rather than 3510 full canvas
     expect(res.realWidthM).toBeLessThan(10); // 600px / 1.5ppc = 400cm = 4m (+ padding), well under 10m
     expect(res.paperScale).toBeGreaterThan(0);
+  });
+
+  it('draws height filter checkbox badge with checked and unchecked states on export canvas', () => {
+    const fillTextCalls: string[] = [];
+    const fillStyles: string[] = [];
+    let currentFillStyle = '';
+
+    const mockCtx = {
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      rect: vi.fn(),
+      roundRect: vi.fn(),
+      fill: vi.fn(() => {
+        fillStyles.push(currentFillStyle);
+      }),
+      stroke: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      fillText: vi.fn((text: string) => {
+        fillTextCalls.push(String(text));
+      }),
+      set fillStyle(val: string) {
+        currentFillStyle = val;
+      },
+      get fillStyle() {
+        return currentFillStyle;
+      },
+      strokeStyle: '',
+      lineWidth: 1,
+      lineCap: 'butt',
+      lineJoin: 'miter',
+      font: '',
+      textAlign: 'left',
+      textBaseline: 'alphabetic',
+    } as unknown as CanvasRenderingContext2D;
+
+    drawHeightFilterBadge(mockCtx, 24, 24, { 40: true, 50: false, 60: true, 70: false }, 1);
+
+    expect(fillTextCalls).toEqual(['แสดงความสูง:', '40 ซม.', '50 ซม.', '60 ซม.', '70 ซม.']);
+    // 2 checked boxes (#2563EB) and 2 unchecked boxes (#FFFFFF)
+    expect(fillStyles.filter((c) => c === '#2563EB')).toHaveLength(2);
+    expect(fillStyles.filter((c) => c === '#FFFFFF')).toHaveLength(2);
   });
 });
