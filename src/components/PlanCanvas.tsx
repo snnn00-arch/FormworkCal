@@ -2,6 +2,8 @@ import React, { useRef, useState, useEffect } from 'react';
 import {
   BeamElement,
   DrawingToolMode,
+  FORMWORK_HEIGHTS,
+  FormworkHeight,
   PlacedPanel,
   Point,
   PrintBoundary,
@@ -19,6 +21,9 @@ interface PlanCanvasProps {
   gridIntersections?: GridIntersection[];
   beams: BeamElement[];
   panels: PlacedPanel[];
+  visibleHeights?: Record<FormworkHeight, boolean>;
+  onToggleVisibleHeight?: (height: FormworkHeight) => void;
+  onShowAllHeights?: () => void;
   snapPoints?: SnapPoint[];
   pixelsPerCm: number;
   selectedBeamId?: string | null;
@@ -223,6 +228,9 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
   gridIntersections = [],
   beams,
   panels,
+  visibleHeights,
+  onToggleVisibleHeight,
+  onShowAllHeights,
   snapPoints = [],
   pixelsPerCm,
   selectedBeamId = null,
@@ -1505,6 +1513,57 @@ export const PlanCanvas: React.FC<PlanCanvasProps> = ({
             : 'cursor-crosshair'
         }`}
       />
+
+      {/* Floating Height Visibility Filter Bar (Top-Left) */}
+      {visibleHeights && onToggleVisibleHeight && (
+        <div
+          className="absolute top-4 left-4 z-10 bg-white/95 backdrop-blur-xs px-2.5 py-1.5 rounded-lg border border-[#E2E8F0] shadow-sm flex flex-wrap items-center gap-2 text-xs"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <span className="font-semibold text-slate-600 text-[11px] select-none">
+            แสดงไม้แบบ:
+          </span>
+          <div className="flex items-center gap-1.5">
+            {FORMWORK_HEIGHTS.map((h) => {
+              const checked = visibleHeights[h] !== false;
+              return (
+                <label
+                  key={h}
+                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border cursor-pointer transition-colors select-none ${
+                    checked
+                      ? 'bg-blue-50/70 border-blue-200 text-slate-800 font-semibold'
+                      : 'bg-slate-50 border-slate-200 text-slate-400 hover:text-slate-600'
+                  }`}
+                  title={
+                    checked
+                      ? `ซ่อนไม้แบบสูง ${h} ซม. บนแปลน`
+                      : `แสดงไม้แบบสูง ${h} ซม. บนแปลน`
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => onToggleVisibleHeight(h)}
+                    aria-label={`แสดงไม้แบบสูง ${h} ซม.`}
+                    className="w-3.5 h-3.5 accent-blue-600 rounded cursor-pointer"
+                  />
+                  <span>{h} ซม.</span>
+                </label>
+              );
+            })}
+          </div>
+          {onShowAllHeights && FORMWORK_HEIGHTS.some((h) => visibleHeights[h] === false) && (
+            <button
+              type="button"
+              onClick={onShowAllHeights}
+              className="px-1.5 py-0.5 rounded text-[11px] font-medium text-blue-600 hover:bg-blue-50 transition-colors cursor-pointer"
+              title="เปิดแสดงไม้แบบทุกความสูง"
+            >
+              ทั้งหมด
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Floating Selection Quick-Action Bar */}
       {effectiveSelectedIds.length > 1 && activeTool === 'select' && (

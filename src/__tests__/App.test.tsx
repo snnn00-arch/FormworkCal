@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import App from '../App';
+import * as exportEngine from '../engine/exportEngine';
 
 describe('App Integration - Minimal White Formwork Calculator', () => {
   it('renders the Minimal White interface with 12-SKU matrix (lengths 120, 100, 50 x heights 40, 50, 60, 70) and fixed 5cm thickness', () => {
@@ -242,5 +243,95 @@ describe('App Integration - Minimal White Formwork Calculator', () => {
 
     // 5. Button returns to default state
     expect(screen.getByText(/ขอบเขตพิมพ์ A3/i)).toBeInTheDocument();
+  });
+
+  it('toggles formwork panel visibility by height on canvas and PDF export, defaulting all heights to checked', async () => {
+    const fillTextCalls: string[] = [];
+    const mockCtx = {
+      save: vi.fn(),
+      restore: vi.fn(),
+      clearRect: vi.fn(),
+      translate: vi.fn(),
+      scale: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      closePath: vi.fn(),
+      stroke: vi.fn(),
+      fill: vi.fn(),
+      fillRect: vi.fn(),
+      strokeRect: vi.fn(),
+      arc: vi.fn(),
+      setLineDash: vi.fn(),
+      drawImage: vi.fn(),
+      fillText: vi.fn((text: string) => {
+        fillTextCalls.push(String(text));
+      }),
+      globalAlpha: 1,
+      strokeStyle: '',
+      fillStyle: '',
+      lineWidth: 1,
+      font: '',
+      textAlign: 'left',
+      textBaseline: 'alphabetic',
+    } as unknown as CanvasRenderingContext2D;
+
+    const getContextSpy = vi
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockReturnValue(mockCtx);
+    const exportPdfSpy = vi
+      .spyOn(exportEngine, 'exportFormworkPdfReport')
+      .mockResolvedValue();
+
+    try {
+      const { container } = render(<App />);
+
+      // Default: all 4 height checkboxes (40, 50, 60, 70 cm) are checked
+      const cb40 = screen.getByRole('checkbox', { name: 'แสดงไม้แบบสูง 40 ซม.' });
+      const cb50 = screen.getByRole('checkbox', { name: 'แสดงไม้แบบสูง 50 ซม.' });
+      const cb60 = screen.getByRole('checkbox', { name: 'แสดงไม้แบบสูง 60 ซม.' });
+      const cb70 = screen.getByRole('checkbox', { name: 'แสดงไม้แบบสูง 70 ซม.' });
+
+      expect(cb40).toBeChecked();
+      expect(cb50).toBeChecked();
+      expect(cb60).toBeChecked();
+      expect(cb70).toBeChecked();
+
+      // Draw a beam with default height 50 cm: (100, 100) -> (400, 100)
+      const canvas = container.querySelector('canvas')!;
+      fireEvent.keyDown(window, { key: '1' });
+      fireEvent.mouseDown(canvas, { clientX: 100, clientY: 100 });
+      fireEvent.mouseDown(canvas, { clientX: 400, clientY: 100 });
+
+      // Panels with height 50 should be rendered on canvas
+      expect(fillTextCalls.some((t) => t.includes('×50'))).toBe(true);
+
+      // Uncheck 50 cm height
+      fillTextCalls.length = 0;
+      fireEvent.click(cb50);
+      expect(cb50).not.toBeChecked();
+
+      // Panels with height 50 should now be hidden on canvas
+      expect(fillTextCalls.some((t) => t.includes('×50'))).toBe(false);
+
+      // "ทั้งหมด" quick-restore button should appear
+      const showAllBtn = screen.getByRole('button', { name: 'ทั้งหมด' });
+      expect(showAllBtn).toBeInTheDocument();
+
+      // Export PDF should receive filtered panels (0 panels when 50 cm is hidden)
+      fireEvent.click(screen.getByRole('button', { name: /รายงาน PDF/i }));
+      expect(exportPdfSpy).toHaveBeenCalledTimes(1);
+      const pdfMetadata = exportPdfSpy.mock.calls[0][2] as exportEngine.PdfReportMetadata;
+      expect(pdfMetadata.panels).toHaveLength(0);
+
+      // Click "ทั้งหมด" to re-enable all heights
+      fillTextCalls.length = 0;
+      fireEvent.click(showAllBtn);
+      expect(cb50).toBeChecked();
+      expect(fillTextCalls.some((t) => t.includes('×50'))).toBe(true);
+    } finally {
+      getContextSpy.mockRestore();
+      exportPdfSpy.mockRestore();
+    }
   });
 });

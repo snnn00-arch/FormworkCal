@@ -3,6 +3,7 @@ import {
   BeamElement,
   DEFAULT_BEAM_WIDTH_CM,
   DrawingToolMode,
+  FORMWORK_HEIGHTS,
   FormworkHeight,
   FormworkProjectData,
   Point,
@@ -81,6 +82,12 @@ export const App: React.FC = () => {
 
   // Default height set to 50 cm as requested
   const [defaultHeight, setDefaultHeight] = useState<FormworkHeight>(50);
+  const [visibleHeights, setVisibleHeights] = useState<Record<FormworkHeight, boolean>>(() =>
+    FORMWORK_HEIGHTS.reduce(
+      (acc, h) => ({ ...acc, [h]: true }),
+      {} as Record<FormworkHeight, boolean>
+    )
+  );
   const [activeTool, setActiveTool] = useState<DrawingToolMode>('select');
   const [printBoundary, setPrintBoundary] = useState<PrintBoundary | null>(null);
 
@@ -126,9 +133,29 @@ export const App: React.FC = () => {
     return computeAllBeamPanels(beams, pixelsPerCm);
   }, [beams, pixelsPerCm]);
 
+  const visiblePanels = useMemo(() => {
+    return panels.filter((p) => visibleHeights[p.heightCm] !== false);
+  }, [panels, visibleHeights]);
+
   const summary = useMemo(() => {
     return computeRentalSummary(panels);
   }, [panels]);
+
+  const handleToggleVisibleHeight = (height: FormworkHeight) => {
+    setVisibleHeights((prev) => ({
+      ...prev,
+      [height]: !prev[height],
+    }));
+  };
+
+  const handleShowAllHeights = () => {
+    setVisibleHeights(
+      FORMWORK_HEIGHTS.reduce(
+        (acc, h) => ({ ...acc, [h]: true }),
+        {} as Record<FormworkHeight, boolean>
+      )
+    );
+  };
 
   // Magnetic Column Corner & Beam Intersection Snap Points for Manual Drawing
   const snapPoints = useMemo(() => {
@@ -702,7 +729,7 @@ export const App: React.FC = () => {
         gridAxes,
         gridIntersections,
         beams,
-        panels,
+        panels: visiblePanels,
         pixelsPerCm,
       });
     } catch (err) {
@@ -733,7 +760,7 @@ export const App: React.FC = () => {
         gridAxes,
         gridIntersections,
         beams,
-        panels,
+        panels: visiblePanels,
         pixelsPerCm,
         fallbackCanvas: canvasRef.current,
       });
@@ -791,7 +818,10 @@ export const App: React.FC = () => {
           gridAxes={gridAxes}
           gridIntersections={gridIntersections}
           beams={beams}
-          panels={panels}
+          panels={visiblePanels}
+          visibleHeights={visibleHeights}
+          onToggleVisibleHeight={handleToggleVisibleHeight}
+          onShowAllHeights={handleShowAllHeights}
           snapPoints={snapPoints}
           pixelsPerCm={pixelsPerCm}
           selectedBeamId={selectedBeamId}
